@@ -1,6 +1,99 @@
+x-backend: &backend
+  build:
+    context: .
+    target: runtime
+x-app-env: &app-env
+  APP_DB_HOST: db
+  APP_DB_NAME: polytech
+  APP_DB_USER: app_runtime
+  APP_DB_PASSWORD: ${APP_DB_PASSWORD:-local-runtime-password}
+  APP_ORIGIN: ${APP_ORIGIN:-http://127.0.0.1:8080}
+  APP_CSRF_SECRET: ${APP_CSRF_SECRET:-local-demo-csrf-secret}
+
 services:
+  db:
+    image: pgvector/pgvector:0.8.7-pg17-bookworm@sha256:b513c48566e4777cd3370451400000c78eda6a08131d68f4c31d4a76f27bd8fd
+    environment:
+      POSTGRES_DB: polytech
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-local-owner-password}
+      APP_DB_PASSWORD: ${APP_DB_PASSWORD:-local-runtime-password}
+    volumes:
+      - db_data:/var/lib/postgresql/data
+      - ./infra/postgres/init-runtime.sh:/docker-entrypoint-initdb.d/10-runtime.sh:ro
+    networks: [data]
+    healthcheck:
+      test: ["CMD", "pg_isready", "-h", "127.0.0.1", "-U", "postgres", "-d", "polytech"]
+      interval: 2s
+      timeout: 3s
+      retries: 30
+    restart: unless-stopped
+
+  migrate:
+    <<: *backend
+    environment:
+      <<: *app-env
+      APP_DB_USER: postgres
+      APP_DB_PASSWORD: ${POSTGRES_PASSWORD:-local-owner-password}
+      APP_AUTH_USERNAME: ${APP_AUTH_USERNAME:-demo}
+      APP_BOOTSTRAP_PASSWORD: ${APP_BOOTSTRAP_PASSWORD:-local-demo-password}
+    command: ["sh", "-ec", "alembic upgrade head && python -m app.bootstrap"]
+    networks: [data]
+    depends_on:
+      db:
+        condition: service_healthy
+
   api:
-    build: .
-    ports:
-      - "8000:8000"
-    command: uvicorn main:app --host 0.0.0.0 --port 8000
+    <<: *backend
+    environment: *app-env
+    networks: [data, web]
+    depends_on:
+      db:
+        condition: service_healthy
+      migrate:
+        condition: service_completed_successfully
+    healthcheck:
+      test:
+        - CMD
+        - python
+        - -c
+        - "from urllib.request import urlopen; urlopen('http://127.0.0.1:8000/api/v1/ready', timeout=3).close()"
+      interval: 3s
+      timeout: 5s
+      retries: 20
+    restart: unless-stopped
+
+  nginx:
+    build:
+      context: ./frontend
+      target: local
+    networks: [ingress, web]
+    depends_on:
+      api:
+        condition: service_healthy
+    restart: unless-stopped
+
+  test:
+    profiles: [test]
+    build:
+      context: .
+      target: test
+    environment:
+      <<: *app-env
+      APP_AUTH_USERNAME: ${APP_AUTH_USERNAME:-demo}
+      APP_BOOTSTRAP_PASSWORD: ${APP_BOOTSTRAP_PASSWORD:-local-demo-password}
+      RUN_POSTGRES_TESTS: "1"
+    networks: [data]
+    depends_on:
+      migrate:
+        condition: service_completed_successfully
+
+volumes:
+  db_data:
+
+networks:
+  ingress:
+  web:
+    internal: true
+  data:
+    internal: true

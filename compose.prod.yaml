@@ -1,0 +1,27 @@
+services:
+  db:
+    environment:
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?Set POSTGRES_PASSWORD}
+      APP_DB_PASSWORD: ${APP_DB_PASSWORD:?Set APP_DB_PASSWORD}
+  migrate:
+    environment:
+      APP_ENV: production
+      APP_DB_PASSWORD: ${POSTGRES_PASSWORD:?Set POSTGRES_PASSWORD}
+      APP_ORIGIN: ${APP_ORIGIN:?Set the HTTPS APP_ORIGIN}
+      APP_CSRF_SECRET: ${APP_CSRF_SECRET:?Set APP_CSRF_SECRET}
+      APP_AUTH_USERNAME: ${APP_AUTH_USERNAME:-operator}
+      APP_BOOTSTRAP_PASSWORD: ${APP_BOOTSTRAP_PASSWORD:?Set APP_BOOTSTRAP_PASSWORD}
+  api:
+    environment:
+      APP_ENV: production
+      APP_DB_PASSWORD: ${APP_DB_PASSWORD:?Set APP_DB_PASSWORD}
+      APP_ORIGIN: ${APP_ORIGIN:?Set the HTTPS APP_ORIGIN}
+      APP_CSRF_SECRET: ${APP_CSRF_SECRET:?Set APP_CSRF_SECRET}
+  nginx:
+    build:
+      target: production
+    ports:
+      - "80:80"
+      - "443:443"
+    volumes:
+      - ${APP_TLS_DIR:?Set APP_TLS_DIR}:/etc/nginx/tls:ro
