@@ -4,7 +4,7 @@
 
 ## 현재 기반과 제안 구조
 
-현재 1단계 기본 티켓 API와 2단계 SOP·해결 티켓 지식 검색을 제공한다. `GET /health`는 200과 `{"status":"ok"}`를 반환한다. API와 색인 worker는 같은 Python 이미지를 사용한다. React 앱은 Vite로 빌드한다.
+현재 기본 티켓 API, SOP·해결 티켓 지식 검색, 3단계 장애 분석 에이전트를 제공한다. `GET /health`는 200과 `{"status":"ok"}`를 반환한다. API와 색인 worker는 같은 Python 이미지를 사용한다. React 앱은 Vite로 빌드한다.
 
 ```mermaid
 flowchart LR
@@ -54,9 +54,9 @@ flowchart LR
 | `/knowledge/search` | 자연어 질의, SOP·해결 티켓 필터, 관련 청크와 원본 출처 |
 | `/handoffs` | 현재·직전 회차, 미해결·미배정·이월 집계, 미완료 작업·누락 정보, 초안 생성과 과거 보고서 목록 |
 | `/handoffs/:id` | 입력 스냅샷, 근거, 인계조·인수조, 편집·갱신·승인, 승인된 고정 내용, 생성 실패 시 수동 편집 |
-| `/ai-runs/:id` | 실행 상태, 소요 시간, 검증된 결과 및 근거, 마스킹된 도구 이력, 실패·재실행 안내 |
+| `/agent` 및 `?run={id}` | 질문과 티켓 선택, 분석 상태·근거, 마스킹된 도구 이력, 재실행 안내 |
 
-공통 상태는 로딩, 빈 결과, 네트워크 오류, 권한 없음, 편집 충돌이다. 진행 중인 AI 실행 화면은 약 2초 간격으로 폴링하고 완료·실패·화면 이탈 시 중단한다. 누락 정보와 추정은 구분하고 근거를 각 진단 단계 옆에 배치한다. 원문과 모델 출력은 텍스트 또는 제한된 Markdown으로 표시한다. 원시 HTML은 렌더링하지 않는다. 실패한 AI 실행에서도 티켓 수정과 인수인계 수동 편집을 제공한다.
+공통 상태는 로딩, 빈 결과, 네트워크 오류, 권한 없음, 편집 충돌이다. 진행 중인 장애 분석은 약 1.2초 간격으로 폴링하고 완료·실패·화면 이탈 시 중단한다. 누락 정보와 추정은 구분하고 근거를 각 진단 단계 옆에 배치한다. 원문과 모델 출력은 텍스트 또는 제한된 Markdown으로 표시한다. 원시 HTML은 렌더링하지 않는다. 실패한 AI 실행에서도 티켓 수정과 인수인계 수동 편집을 제공한다.
 
 ## Docker Compose 배포 구조
 
@@ -65,7 +65,7 @@ flowchart LR
 | `db` | `pgvector/pgvector:0.8.7-pg17-bookworm` 후보, `db_data` named volume을 `/var/lib/postgresql/data`에 연결, `pg_isready`, 내부 DB 네트워크만 연결 | 별도 Compose 프로젝트와 볼륨. 포트 발행 없이 `docker compose exec db psql`로 접근 |
 | `migrate` | DB healthy 이후 별도 소유자 자격으로 `alembic upgrade head` 실행 후 종료 | 동일, 시험 전 별도 테스트 DB 사용 |
 | `api` | migration 성공 이후 시작. Nginx와 DB의 내부 네트워크에 연결. 8000은 컨테이너 내부 포트 | 소스 마운트와 Uvicorn reload |
-| `worker` | migration 성공 이후 기동. DB 내부망과 임베딩용 송신 브리지에 연결. 내부 8001번에서 질의 임베딩을 제공한다. API와 `sop_files` 볼륨을 공유하며 `GEMINI_API_KEY`를 담당한다. | 기본 `fake`, 선택 설정 `gemini` |
+| `worker` | migration 성공 이후 기동. 별도 스레드로 색인과 장애 분석 큐를 처리하고 내부 8001번에서 질의 임베딩을 제공한다. API와 `sop_files` 볼륨을 공유하며 `GEMINI_API_KEY`를 담당한다. | 기본 `fake`, 선택 설정 `gemini` |
 | `nginx` | 다단계 Node 빌드 결과 서빙, `/api/`와 `/health`를 API로 프록시. HTTPS 443, HTTP 80은 TLS 리다이렉트 또는 인증서 발급용 | 개발 브라우저에는 Nginx의 `127.0.0.1:8080`만 발행. 화면과 HMR은 컨테이너의 Vite에 프록시 |
 | `frontend` | 정적 파일은 Nginx 이미지에 포함 | Vite 개발 서버, 컨테이너 내부 포트 5173 |
 

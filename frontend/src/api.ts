@@ -38,7 +38,7 @@ export interface Session {
 }
 
 export class ApiError extends Error {
-  constructor(message: string, readonly status: number) {
+  constructor(message: string, readonly status: number, readonly details?: Record<string, unknown>) {
     super(message)
   }
 }
@@ -51,7 +51,7 @@ export async function api<T>(path: string, options?: RequestInit, token?: string
   if (!response.ok) {
     const content = response.headers.get('Content-Type') || ''
     const payload = content.includes('application/json') ? await response.json() : null
-    throw new ApiError(payload?.error?.message ?? `요청 실패 (${response.status})`, response.status)
+    throw new ApiError(payload?.error?.message ?? `요청 실패 (${response.status})`, response.status, payload?.error?.details)
   }
   if (response.status === 204) return undefined as T
   return response.json()

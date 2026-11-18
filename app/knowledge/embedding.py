@@ -15,6 +15,7 @@ from google.genai import errors, types
 from app.knowledge.models import EMBEDDING_DIM
 
 GEMINI_MODEL = "gemini-embedding-2"
+GEMINI_SEARCH_PROFILE = f"gemini:{GEMINI_MODEL}:{EMBEDDING_DIM}:search-v1:chunks-v1"
 MAX_QUERY_LENGTH = 1000
 EMBEDDING_BATCH_SIZE = 12
 
@@ -33,7 +34,7 @@ def embedding_profile() -> EmbeddingProfile:
     if provider == "gemini":
         model = os.environ.get("GEMINI_EMBEDDING_MODEL", GEMINI_MODEL)
         if model == GEMINI_MODEL:
-            return EmbeddingProfile("gemini", model, f"gemini:{model}:{EMBEDDING_DIM}:search-v1:chunks-v1")
+            return EmbeddingProfile("gemini", model, GEMINI_SEARCH_PROFILE)
     raise EmbeddingFailure("EMBEDDING_CONFIG", "지원하는 임베딩 공급자와 모델 설정을 확인하세요.")
 
 

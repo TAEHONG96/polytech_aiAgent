@@ -7,6 +7,7 @@ from typing import Annotated
 from fastapi import FastAPI, HTTPException
 from pydantic import BaseModel, ConfigDict, StringConstraints
 
+from app.agent.queue import process_agent_queue
 from app.knowledge.embedding import MAX_QUERY_LENGTH, EmbeddingFailure, get_embedder
 from app.knowledge.indexing import clean_orphan_files, process_next
 
@@ -30,13 +31,15 @@ def process_queue(stop: Event) -> None:
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     stop = Event()
-    worker = Thread(target=process_queue, args=(stop,), daemon=True)
-    worker.start()
+    threads = [Thread(target=target, args=(stop,), daemon=True) for target in (process_queue, process_agent_queue)]
+    for thread in threads:
+        thread.start()
     try:
         yield
     finally:
         stop.set()
-        worker.join(timeout=2)
+        for thread in threads:
+            thread.join(timeout=2)
 
 
 app = FastAPI(lifespan=lifespan, docs_url=None, redoc_url=None, openapi_url=None)

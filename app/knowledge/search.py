@@ -7,7 +7,7 @@ from sqlalchemy import func, or_, select
 from sqlalchemy.orm import Session
 
 from app.http import ApiError
-from app.knowledge.embedding import EmbeddingFailure, checked_vector
+from app.knowledge.embedding import GEMINI_SEARCH_PROFILE, EmbeddingFailure, checked_vector
 from app.knowledge.indexing import RESOLVED_STATUSES
 from app.knowledge.models import IndexJob, IndexStatus, KnowledgeChunk, SopDocument, SourceType
 from app.models import Ticket
@@ -43,8 +43,13 @@ def worker_query_vector(query: str, profile: str) -> list[float]:
         raise ApiError(503, "EMBEDDING_UNAVAILABLE", "검색용 임베딩을 생성할 수 없습니다.") from exc
 
 
+def calibrated_min_score(profile: str) -> float | None:
+    return 0.62 if profile == GEMINI_SEARCH_PROFILE else None
+
+
 def search_index(
-    db: Session, *, vector: list[float], profile: str, source_types: list[SourceType], limit: int
+    db: Session, *, vector: list[float], profile: str, source_types: list[SourceType], limit: int,
+    min_score: float | None = None,
 ) -> list[SearchResult]:
     distance = KnowledgeChunk.embedding.cosine_distance(vector)
     statement = (
@@ -74,9 +79,10 @@ def search_index(
         .subquery()
     )
     results = []
-    ranked_sources = select(statement).where(statement.c.source_rank == 1).order_by(
-        statement.c.distance, statement.c.source_id
-    ).limit(limit)
+    ranked_sources = select(statement).where(statement.c.source_rank == 1)
+    if min_score is not None:
+        ranked_sources = ranked_sources.where(statement.c.distance <= 1 - min_score)
+    ranked_sources = ranked_sources.order_by(statement.c.distance, statement.c.source_id).limit(limit)
     for row in db.execute(ranked_sources):
         is_sop = row.source_type == SourceType.SOP
         results.append(SearchResult(
