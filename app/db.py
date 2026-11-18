@@ -33,6 +33,11 @@ def get_db() -> Iterator[Session]:
 Database = Annotated[Session, Depends(get_db)]
 
 
+def lock_ticket_snapshot(db: Session) -> None:
+    # Ticket and schedule writes share this transaction lock with handover capture.
+    db.execute(text("SELECT pg_advisory_xact_lock(821437602134)"))
+
+
 @lru_cache
 def expected_schema() -> frozenset[str]:
     config = Config(ROOT / "alembic.ini")

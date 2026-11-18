@@ -8,7 +8,7 @@ from uuid import NAMESPACE_URL, uuid5
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
-from app.db import engine
+from app.db import engine, lock_ticket_snapshot
 from app.knowledge.documents import register_sop
 from app.knowledge.embedding import embedding_profile
 from app.knowledge.indexing import RESOLVED_STATUSES, enqueue_sop, now_utc, sync_ticket_index
@@ -124,6 +124,7 @@ def seed_demo_incidents(username: str) -> int:
         if actor is None:
             raise SystemExit("Active seed operator not found. Use --username.")
         for incident in DEMO_INCIDENTS:
+            lock_ticket_snapshot(db)
             ticket_id = uuid5(NAMESPACE_URL, f"polytech-ai-agent/demo/incidents/{incident.key}")
             if db.get(Ticket, ticket_id) is not None:
                 continue
@@ -143,6 +144,7 @@ def seed_demo_incidents(username: str) -> int:
                     "resolved_at": detected + timedelta(hours=1),
                 }, reason="가상 복구 검증 완료")
             if ticket.status != incident.status:
+                lock_ticket_snapshot(db)
                 apply_changes(db, ticket, actor.id, "transitioned", {"status": incident.status}, reason="가상 장애 처리 단계 반영")
             db.commit()
             added += 1
@@ -158,6 +160,8 @@ def seed(username: str, *, sop_only: bool = False) -> tuple[int, int]:
             raise SystemExit("Active seed operator not found. Use --username.")
         for case in SCENARIOS:
             ticket_id = uuid5(NAMESPACE_URL, f"polytech-ai-agent/demo/tickets/{case.key}")
+            if not sop_only:
+                lock_ticket_snapshot(db)
             if not sop_only and db.get(Ticket, ticket_id) is None:
                 past = now_utc() - timedelta(days=7)
                 ticket = Ticket(

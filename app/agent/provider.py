@@ -65,6 +65,10 @@ class FakeGenerator:
 
     async def generate(self, contents: list[types.Content], config: types.GenerateContentConfig):
         request = json.loads(contents[0].parts[0].text)
+        if request.get("purpose") == "handover":
+            from app.handover.analysis import fake_response
+
+            return fake_response(request, contents, config)
         if config.response_mime_type == "application/json":
             sources = request["evidence"]
             current = next((item for item in sources if item["kind"] == "TICKET_DETAILS"), None)

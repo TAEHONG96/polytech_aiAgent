@@ -110,6 +110,7 @@ services:
       <<: *app-env
       APP_AUTH_USERNAME: ${APP_AUTH_USERNAME:-demo}
       APP_BOOTSTRAP_PASSWORD: ${APP_BOOTSTRAP_PASSWORD:-local-demo-password}
+      TEST_DB_OWNER_PASSWORD: ${POSTGRES_PASSWORD:-local-owner-password}
       RUN_POSTGRES_TESTS: "1"
       AGENT_PROVIDER: fake
     networks: [data]

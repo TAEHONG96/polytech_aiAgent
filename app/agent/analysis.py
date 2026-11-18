@@ -118,12 +118,13 @@ def content_of(response: types.GenerateContentResponse) -> types.Content:
     return candidate.content
 
 
-async def investigate(
-    *, request: dict, toolbox: Toolbox, model: Generator, usage: Usage, seconds: float, trace: Callable[[Trace], None],
-) -> dict:
-    budget = Budget(time.monotonic() + seconds, usage)
+async def call_tools(
+    request: dict, toolbox, model: Generator, budget: Budget, trace: Callable[[Trace], None], *,
+    specs=SPECS, policy: str = POLICY,
+) -> bool:
+    usage = budget.usage
     planning = types.GenerateContentConfig(
-        system_instruction=POLICY, tools=[tool_declaration()],
+        system_instruction=policy, tools=[tool_declaration(specs)],
         automatic_function_calling=types.AutomaticFunctionCallingConfig(disable=True),
         tool_config=types.ToolConfig(function_calling_config=types.FunctionCallingConfig(mode="AUTO")),
         max_output_tokens=2048,
@@ -160,7 +161,7 @@ async def investigate(
             except TimeoutError:
                 outcome = ToolOutcome("error", {"error": "TOOL_TIMEOUT"}, {"error_code": "TOOL_TIMEOUT"})
             usage.embedding_requests = toolbox.embedding_requests
-            trace(Trace(usage.tool_calls, call.name if call.name in SPECS else "unknown", outcome.status,
+            trace(Trace(usage.tool_calls, call.name if call.name in specs else "unknown", outcome.status,
                         outcome.details, round((time.monotonic() - start) * 1000)))
             feedback.append(types.Part(function_response=types.FunctionResponse(
                 name=call.name, id=call.id, response=outcome.payload,
@@ -172,7 +173,14 @@ async def investigate(
         history.extend([content, types.Content(role="user", parts=feedback)])
     else:
         limit_hit = True
+    return limit_hit
 
+
+async def investigate(
+    *, request: dict, toolbox: Toolbox, model: Generator, usage: Usage, seconds: float, trace: Callable[[Trace], None],
+) -> dict:
+    budget = Budget(time.monotonic() + seconds, usage)
+    limit_hit = await call_tools(request, toolbox, model, budget, trace)
     final_config = types.GenerateContentConfig(
         system_instruction=FINAL_POLICY, response_mime_type="application/json",
         response_json_schema=AnalysisDraft.model_json_schema(), max_output_tokens=4096,

@@ -9,24 +9,24 @@ IT 운영자와 데이터센터 테크니션을 위한 웹 서비스입니다. �
 | 기능 | 제공 범위 |
 | --- | --- |
 | 장애 티켓 관리 | **구현 완료.** 로컬 운영자 로그인, 티켓 등록·검색·조회·수정·상태 전환, 종료 티켓 보관을 지원합니다. |
-| 담당자·후속 작업 관리 | **예정.** 근무조와 담당자를 배정하고, 후속 작업과 운영 메모를 기록하며, 작업 이력을 확인합니다. |
+| 담당자·후속 작업 관리 | **구현 완료.** 티켓에 근무 회차와 담당자를 배정하고, 후속 작업·운영 메모·변경 이력을 관리합니다. |
 | SOP 관리·장애 지식 검색 | **구현 완료.** PDF·TXT·Markdown을 등록하고, SOP와 해결 티켓을 검색해 관련 내용과 원본을 확인합니다. |
 | 근거 기반 장애 분석 | **구현 완료.** Gemini가 조회 도구를 선택하고, 출처가 있는 장애 가설과 진단 단계를 제안합니다. |
-| 교대 인수인계 | **예정.** 미해결 티켓, 미완료 작업, 누락 정보를 모아 보고서 초안을 만들고 근무조 책임자가 검토·승인합니다. |
+| 교대 인수인계 | **구현 완료.** 관련 티켓과 작업을 수집하고, 근거와 확인 질문을 포함한 AI 초안, 인계조 확정, 인수조 확인을 제공합니다. |
 
 ## 에이전트 역할
 
-Gemini 에이전트는 조회 전용 도구로 과거 해결 사례와 SOP를 읽고, 진단 순서와 추가 확인 질문을 제안합니다. 가능한 경우 제안마다 출처를 표시하고, 근거가 부족한 경우 불확실성과 확인 방법을 함께 제시합니다. 교대 인수인계 초안은 4단계에 계획되어 있습니다.
+Gemini 에이전트는 조회 전용 도구로 과거 해결 사례와 SOP를 읽고, 진단 순서와 추가 확인 질문을 제안합니다. 교대 인수인계에서는 고정된 티켓·작업 이력에서 주요 장애와 조치의 근거를 선택합니다.
 
 티켓 상태 변경과 실제 인프라 조치는 운영자가 수행하고, 인수인계 보고서는 근무조 책임자가 승인합니다. 담당자나 마감 시각처럼 조건이 명확한 누락 항목은 서버 규칙으로 검사합니다. [에이전트 설계](docs/AGENT.md)
 
 ## 현재 개발 단계
 
-**3단계 · Gemini 장애 분석 에이전트**
+**4단계 · AI 운영 인수인계**
 
 1단계에서 Docker Compose, 기본 티켓 관리와 운영자 세션을 구성했습니다. 2단계에서 SOP 업로드와 색인, 해결 티켓의 자동 색인, 출처가 있는 pgvector 검색을 추가했습니다.
 
-3단계에서 실제 Gemini 임베딩을 검증하고, 분석 화면과 조회 전용 Function Calling을 추가했습니다. 교대 운영과 인수인계는 4단계입니다. [단계별 개발 계획](docs/TASKS.md) · [제품 요구사항](docs/PRD.md)
+3단계에서 실제 Gemini 임베딩을 검증하고, 분석 화면과 조회 전용 Function Calling을 추가했습니다. 4단계에서 교대 업무, 보고서 초안과 인계·인수 확인을 추가했습니다. [단계별 개발 계획](docs/TASKS.md) · [검증 기록](docs/PROGRESS.md)
 
 ## 개발 실행
 
@@ -79,6 +79,31 @@ docker compose -p polytech-agent-eval up -d --build --wait
 ```
 
 `--prepare`는 티켓과 SOP가 비어 있는 격리 DB를 대상으로 한다. 이후에는 `--prepare` 없이 평가만 재실행할 수 있다. 실제 Gemini 시연은 별도 포트 [18081](http://127.0.0.1:18081/agent)에서 가상 자료로 진행한다. [에이전트 동작과 품질 평가](docs/AGENT.md)
+
+## 교대 인수인계 시연
+
+개발 Compose를 실행한 뒤 PowerShell에서 아래 명령으로 인계조와 인수조를 등록합니다. `demo`는 로컬에서 실제 사용하는 운영자 계정명으로 바꿀 수 있습니다. 시연용 인수 계정 비밀번호는 터미널 프롬프트에서 입력합니다. 회차는 한국 표준시 기준으로 생성하며 날짜가 넘어가는 구간도 지원합니다.
+
+```powershell
+docker compose run --rm --no-deps migrate python -m app.handover.schedule add-user shift-receiver '인수조 운영자'
+docker compose run --rm --no-deps migrate python -m app.handover.schedule add-team '인계조' --lead demo
+docker compose run --rm --no-deps migrate python -m app.handover.schedule add-team '인수조' --lead shift-receiver
+$handoverStart = [DateTimeOffset]::UtcNow.ToOffset([TimeSpan]::FromHours(9)).AddHours(-6)
+$handoverSwitch = $handoverStart.AddHours(8)
+$handoverEnd = $handoverSwitch.AddHours(8)
+$handoverFormat = 'yyyy-MM-ddTHH:mm:sszzz'
+docker compose run --rm --no-deps migrate python -m app.handover.schedule add-shift '인계조' ($handoverStart.ToString($handoverFormat)) ($handoverSwitch.ToString($handoverFormat))
+docker compose run --rm --no-deps migrate python -m app.handover.schedule add-shift '인수조' ($handoverSwitch.ToString($handoverFormat)) ($handoverEnd.ToString($handoverFormat))
+```
+
+등록된 일정을 재사용할 때는 같은 시작·종료 시각을 지정합니다. CLI는 일정 중첩을 거부합니다.
+
+1. 인계조 계정으로 로그인해 가상 티켓을 등록합니다. 상세 화면에서 근무 회차를 배정하고, 담당자가 없는 미완료 작업을 추가합니다.
+2. [교대 인수인계](http://127.0.0.1:8080/handovers)에서 대상을 확인하고 초안을 만든 뒤 **AI 분석 실행**을 선택합니다. 결과의 출처를 열어 원본 스냅샷과 비교합니다.
+3. 인계 요약과 누락 항목의 답변 또는 미확인 사유를 저장합니다. **인계 준비 완료**를 누른 뒤 인계조 책임자로 **최종 확정**을 선택합니다.
+4. 인수조 계정으로 같은 보고서를 열어 **인수 확인**을 누릅니다. 수정 이력에서 초기 초안과 확정본을 조회합니다.
+
+[REST API 계약](docs/API.md#인수인계) · [실제 Gemini 스모크 실행](docs/AGENT.md#4단계-인수인계-연동)
 
 ## 통합 테스트와 빌드
 

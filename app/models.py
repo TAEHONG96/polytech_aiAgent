@@ -60,6 +60,10 @@ class Ticket(Base):
     recheck_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     resolution: Mapped[str | None] = mapped_column(Text)
     resolved_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    shift_instance_id: Mapped[UUID | None] = mapped_column(ForeignKey("shift_instances.id"), index=True)
+    owner_id: Mapped[UUID | None] = mapped_column(ForeignKey("users.id"))
+    warnings: Mapped[str | None] = mapped_column(Text)
+    approval_required: Mapped[bool | None]
     created_by: Mapped[UUID] = mapped_column(ForeignKey("users.id"))
     version: Mapped[int]
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))

@@ -58,7 +58,9 @@ def analyze(body: AnalyzeInput, response: Response, db: Database, user: WriteUse
 
 @router.get("/runs/{run_id}")
 def read_run(run_id: UUID, db: Database, user: CurrentUser) -> dict:
-    run = db.scalar(select(AgentRun).where(AgentRun.id == run_id, AgentRun.requested_by == user.id))
+    run = db.scalar(select(AgentRun).where(
+        AgentRun.id == run_id, AgentRun.requested_by == user.id, AgentRun.handover_id.is_(None),
+    ))
     if run is None:
         raise ApiError(404, "AGENT_RUN_NOT_FOUND", "분석 실행을 찾을 수 없습니다.")
     events = list(db.scalars(select(AgentToolCall).where(AgentToolCall.run_id == run.id).order_by(AgentToolCall.sequence)))
