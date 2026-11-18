@@ -1,7 +1,8 @@
 from alembic import context
 
+from app.agent.models import Base
 from app.db import engine
-from app.knowledge.models import Base
+from app.knowledge import models  # Register the knowledge tables in Base.metadata.
 from app.settings import settings
 
 

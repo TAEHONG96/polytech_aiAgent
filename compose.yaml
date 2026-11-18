@@ -75,6 +75,7 @@ services:
       AGENT_PROVIDER: ${AGENT_PROVIDER:-fake}
       GEMINI_EMBEDDING_MODEL: ${GEMINI_EMBEDDING_MODEL:-gemini-embedding-2}
       GEMINI_API_KEY: ${GEMINI_API_KEY:-}
+      GEMINI_GENERATION_MODEL: ${GEMINI_GENERATION_MODEL:-gemini-3.8-flash}
     command: ["python", "-m", "uvicorn", "app.knowledge.worker:app", "--host", "0.0.0.0", "--port", "8001"]
     volumes:
       - sop_files:/var/lib/polytech/sops

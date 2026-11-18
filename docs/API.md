@@ -10,7 +10,7 @@
 - 오류는 `{error:{code,message,details,request_id}}`로 통일한다. 401 세션 없음·만료, 403 권한·CSRF 실패, 404 누락 또는 조회할 수 없는 리소스, 409 버전·전이·인계 자료 충돌, 422 잘못된 입력, 429 속도 제한, 503 DB 또는 작업 인프라 불가를 나타낸다. 모든 응답에 `X-Request-ID`를 포함한다. [FastAPI 예외 처리](https://fastapi.tiangolo.com/tutorial/handling-errors/)
 - 로그인 성공 시 세션 쿠키와 CSRF 값을 응답한다. 같은 출처의 `GET /auth/session`은 새로 고침 후 CSRF 값을 돌려준다. 로그인은 `Origin`을 검사하고 인증 이후 쓰기 요청은 `Origin`과 `X-CSRF-Token`을 검사한다. 개발 기본 환경은 루프백 HTTP, 운영 환경은 TLS 쿠키다.
 - 티켓과 보고서 변경은 `expected_version`을 받는다. 상태 변경·배정·메모·작업은 동일 티켓 버전을 공유한다. `DELETE`는 `expected_version` 쿼리 인자를 받는다. 버전이 변경되면 409 `VERSION_CONFLICT`와 현재 버전을 반환한다.
-- AI 실행 생성 및 인수인계 초기 생성·갱신은 사용자·종류별 `Idempotency-Key`(UUID)를 받는다. 같은 대상과 본문을 재전송하면 이전 실행 ID와 응답을 반환한다. 같은 키를 다른 대상이나 본문에 쓰면 409다. 티켓 분석은 동일 대상·입력 버전에 대기 또는 실행 중인 작업이 있으면 409와 해당 실행 ID를 반환한다. 인수인계는 보고서 버전으로 중복 갱신을 제어한다. 새 실행 요청은 새 키를 사용한다.
+- 장애 분석은 사용자당 진행 중인 실행 한 건을 허용한다. 중복 요청에는 409와 기존 실행 ID를 반환한다. 향후 인수인계는 보고서 버전으로 중복 갱신을 제어한다.
 
 ## 인증과 교대 조회
 
@@ -83,16 +83,27 @@
 
 질의는 1–1,000자, `limit`은 1–20이다. 기본값은 두 출처 유형과 5건이다. 결과의 `source_id`는 원본 UUID다. `source_url`은 SOP 상세 또는 티켓 상세 웹 경로다. PDF는 `page_number`, Markdown은 `section`, 티켓은 `ticket_version`을 제공한다. `chunk_index`는 0부터 센다.
 
-각 항목은 `source_type`, `source_id`, `title`, `content`, `score`, `chunk_index`, `page_number`, `section`, `ticket_version`, `source_url`을 반환한다. 점수는 `1 - cosine_distance`이다. 같은 임베딩 프로필에서 공급자가 색인한 청크를 정확 코사인 거리로 비교하고, 원본별 최고 순위 청크 하나를 반환한다. 점수가 높을수록 두 벡터가 가깝다. 조건을 충족하는 출처가 없으면 빈 배열이다. worker 또는 임베딩 오류는 503, Gemini 호출 한도는 429를 반환한다.
+각 항목은 `source_type`, `source_id`, `title`, `content`, `score`, `chunk_index`, `page_number`, `section`, `ticket_version`, `source_url`을 반환한다. 점수는 `1 - cosine_distance`이다. 같은 임베딩 프로필에서 공급자가 색인한 청크를 정확 코사인 거리로 비교하고, 원본별 최고 순위 청크 하나를 반환한다. 점수가 높을수록 두 벡터가 가깝다. 현재 Gemini 검색 프로필에는 가상 자료 평가에서 검증한 최소 점수 0.62를 적용한다. 조건을 충족하는 출처가 없으면 빈 배열이다. worker 또는 임베딩 오류는 503, Gemini 호출 한도는 429를 반환한다.
 
-## 장애 분석 AI와 인수인계 설계
+## 장애 분석
+
+| 메서드와 경로 | 응답 | 인증 |
+| --- | --- | --- |
+| `POST /agent/analyze` | 202와 `run_id`, `status` 및 `Location: /api/v1/agent/runs/{id}` | 세션·Origin·CSRF |
+| `GET /agent/runs/{id}` | 200과 상태, 결과·출처 또는 오류, 도구 호출 기록과 사용량 | 요청자 세션 |
+
+```json
+{"message":"서버 부팅 실패 원인을 분석해줘","ticket_id":"48bdae70-1792-5c1b-91d1-97facd4120b6"}
+```
+
+`message`는 1–2,000자다. `ticket_id`는 선택적 UUID이며 실제 생성 티켓의 ID를 사용한다. 잘못된 형식은 422, 존재하지 않는 티켓이나 본인 소유가 아닌 실행은 404다. 진행 중인 요청은 `AGENT_BUSY`와 `details.run_id`를 반환한다.
+
+조회 응답의 `status`는 `queued`, `running`, `succeeded`, `failed` 중 하나다. `result`는 `summary`, `confirmed_facts`, `hypotheses`, `diagnostic_steps`, `additional_information`, `limitations`, `evidence`를 포함한다. `tool_calls`에는 순서, 도구명, 상태, 검증된 요약, 근거 키와 소요 시간이 표시된다. 실패는 `error.code`, `error.message`, `error.retryable`로 전달된다. [도구와 응답 검증](AGENT.md)
+
+## 인수인계 설계
 
 | 메서드와 경로 | 요청·응답 | 권한·조건 |
 | --- | --- | --- |
-| `POST /tickets/{id}/analyses` | `expected_version` + 멱등 키 → 202 `{run_id,status}`와 `Location: /api/v1/ai-runs/{run_id}` | 인증 사용자, 비보관 티켓 |
-| `GET /tickets/{id}/analyses` | 200 해당 티켓 분석 실행 목록 | 인증 사용자 |
-| `GET /ai-runs/{id}` | 200 종류, 상태, 대상·입력 버전, 결과·근거 또는 오류, 입력 변경 표시, 타임스탬프 | 실행 대상 조회 권한 필요 |
-| `GET /ai-runs/{id}/tool-calls` | 200 호출명·순번·상태·시간·참조 ID·마스킹 인자 요약 | 실행 대상 조회 권한 필요 |
 | `GET /handoffs` | 회차·상태 필터와 커서 → 200 목록 | 인증 사용자 |
 | `POST /handoffs` | `outgoing_shift_id`와 멱등 키 → 202 `{handoff_id,version,run_id,status}`, AI 실행 Location | 인계조 소속. 수동 편집 가능한 초기 초안·스냅샷과 AI 실행을 함께 기록한다. 이미 생성된 보고서에 다른 요청을 하면 409와 기존 ID를 반환한다. |
 | `GET /handoffs/{id}` | 200 최신 리비전, 스냅샷, 본문·확인 항목, 최근 실행 ID, 승인 정보 | 인증 사용자 |
@@ -102,4 +113,4 @@
 
 초안 생성·편집·갱신·승인은 현재 또는 직전 인계 회차에 적용한다. 해당 범위를 지난 미승인 보고서는 읽기 전용이며 변경 요청에는 409 `HANDOFF_SHIFT_EXPIRED`를 반환한다.
 
-AI 실행 조회는 업무 응답 200 안에 `queued`, `running`, `succeeded`, `failed`를 표현한다. 실패 결과는 `error_code`, `retryable`, 안전한 사용자 메시지를 포함한다. 보고서 실행 결과는 해당 초안 버전이 그대로일 때만 적용한다. 사용자가 수정 또는 승인한 경우 생성 결과를 실행 상세에서 조회할 수 있다. 승인에 필요한 내용은 인계 요약과 스냅샷의 누락 ID 각각에 대한 확인 사유다. AI 실행과 승인 가능 여부는 독립적이다. 상세 결과 형식은 [에이전트 설계](AGENT.md)를 따른다.
+보고서 실행 결과는 해당 초안 버전이 그대로일 때만 적용한다. 사용자가 수정 또는 승인한 경우 생성 결과를 실행 상세에서 조회할 수 있다. 승인에 필요한 내용은 인계 요약과 스냅샷의 누락 ID 각각에 대한 확인 사유다. AI 실행과 승인 가능 여부는 독립적이다. 상세 결과 형식은 [에이전트 설계](AGENT.md)를 따른다.

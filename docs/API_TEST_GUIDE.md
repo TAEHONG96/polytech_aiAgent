@@ -166,6 +166,21 @@ Invoke-RestMethod "$base/api/v1/tickets?scope=archived&q=$($ticket.number)" -Web
 | `429` | 로그인 요청이 짧은 시간에 반복됨 | Nginx가 제한한 응답에는 FastAPI JSON 오류 형식이 없을 수 있음 |
 | `503 DB_UNAVAILABLE` | API가 요청 처리 중 DB에 연결하지 못함 | `docker compose ps` 및 `docker compose logs db api` |
 
+## AI 장애 분석 확인
+
+로컬 운영자 세션을 다시 만든 뒤 질문을 제출한다. 자동 테스트는 모의 Gemini를 사용하며, 실제 Gemini의 가상 자료 평가는 [README](../README.md#ai-장애-분석-시연)의 격리 환경을 사용한다.
+
+```powershell
+$accepted = Send-ApiJson POST '/api/v1/agent/analyze' @{
+    message = '서버 부팅 실패의 가능한 원인과 확인 절차를 알려줘'
+}
+$accepted.StatusCode
+$runPath = $accepted.Headers['Location']
+Invoke-RestMethod "$base$runPath" -WebSession $apiSession
+```
+
+접수는 HTTP 202이며 이후 GET에서 상태를 확인한다. 완료 응답에는 `result.evidence`, `tool_calls`, `usage`가 포함된다. `ticket_id`는 선택적 UUID다. [분석 API 계약](API.md#장애-분석)
+
 ## 자동 통합 테스트
 
 격리된 Compose 프로젝트에서 실제 PostgreSQL을 사용합니다. 세션과 CSRF, 티켓 CRUD와 상태 전이, 보관, 변경 이력, 입력 검증, 커서, 동시 수정, DB 권한을 확인합니다.

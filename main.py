@@ -1,5 +1,6 @@
 from fastapi import FastAPI
 
+from app.agent.routes import router as agent_router
 from app.auth import router as auth_router
 from app.db import router as readiness_router
 from app.http import install_http_handlers
@@ -12,6 +13,7 @@ app.include_router(readiness_router, prefix="/api/v1")
 app.include_router(auth_router, prefix="/api/v1")
 app.include_router(ticket_router, prefix="/api/v1")
 app.include_router(knowledge_router, prefix="/api/v1")
+app.include_router(agent_router, prefix="/api/v1")
 
 
 @app.get("/health")

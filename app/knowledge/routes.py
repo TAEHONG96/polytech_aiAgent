@@ -18,7 +18,7 @@ from app.knowledge.documents import MAX_UPLOAD_BYTES, original_path, register_so
 from app.knowledge.embedding import MAX_QUERY_LENGTH, EmbeddingFailure, embedding_profile
 from app.knowledge.indexing import enqueue_sop, sync_ticket_index, ticket_is_indexable
 from app.knowledge.models import IndexJob, IndexStatus, SopDocument, SourceType
-from app.knowledge.search import SearchResult, search_index, worker_query_vector
+from app.knowledge.search import SearchResult, calibrated_min_score, search_index, worker_query_vector
 from app.models import Ticket
 
 router = APIRouter(tags=["knowledge"])
@@ -207,5 +207,8 @@ def search(body: SearchRequest, db: Database, user: WriteUser) -> SearchResponse
         raise ApiError(503, exc.code, str(exc)) from exc
     db.rollback()  # Release the authentication transaction before the worker request.
     vector = worker_query_vector(body.query, profile)
-    results = search_index(db, vector=vector, profile=profile, source_types=body.source_types, limit=body.limit)
+    results = search_index(
+        db, vector=vector, profile=profile, source_types=body.source_types, limit=body.limit,
+        min_score=calibrated_min_score(profile),
+    )
     return SearchResponse(results=results, embedding_profile=profile)

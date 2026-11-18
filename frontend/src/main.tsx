@@ -3,6 +3,7 @@ import type { FormEvent } from 'react'
 import { createRoot } from 'react-dom/client'
 import { api, ApiError, errorMessage, statuses } from './api'
 import type { Session, Severity, Status, Ticket, TicketPage } from './api'
+import { AgentPage } from './agent'
 import { KnowledgeSearch, SopDetail, SopList } from './knowledge'
 import { ErrorNotice } from './ui'
 import './style.css'
@@ -213,7 +214,10 @@ function TicketDetail({ id, edit, session }: { id: string; edit: boolean; sessio
     <>
       <div className="row heading">
         <div><p className="meta">{ticket.number}</p><h1>{ticket.title}</h1></div>
-        {!ticket.archived_at && <a className="button secondary" href={'/tickets/' + id + '/edit'}>수정</a>}
+        <div className="row">
+          <a className="button secondary" href={'/agent?ticket=' + encodeURIComponent(id)}>AI 분석</a>
+          {!ticket.archived_at && <a className="button secondary" href={'/tickets/' + id + '/edit'}>수정</a>}
+        </div>
       </div>
       <ErrorNotice message={error} />
       <section className="surface">
@@ -279,7 +283,7 @@ function App() {
       <header><nav className="shell row">
         <div className="row">
           <a className="brand" href="/tickets">IT 운영 지원</a>
-          {session && <><a href="/tickets">장애 티켓</a><a href="/knowledge">SOP 문서</a><a href="/knowledge/search">지식 검색</a></>}
+          {session && <><a href="/tickets">장애 티켓</a><a href="/knowledge">SOP 문서</a><a href="/knowledge/search">지식 검색</a><a href="/agent">AI 장애 분석</a></>}
         </div>
         {session && <div className="row account"><span>{session.user.display_name}</span><button className="secondary" onClick={logout}>로그아웃</button></div>}
       </nav></header>
@@ -287,6 +291,7 @@ function App() {
         <ErrorNotice message={error} />
         {session === undefined ? <p role="status">세션을 확인하는 중입니다.</p>
           : !session ? <Login onLogin={setSession} />
+          : path === '/agent' ? <AgentPage session={session} />
           : path === '/knowledge/search' ? <KnowledgeSearch session={session} />
           : path === '/knowledge' ? <SopList session={session} />
           : sopDetail ? <SopDetail id={sopDetail[1]} session={session} />

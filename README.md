@@ -11,22 +11,22 @@ IT 운영자와 데이터센터 테크니션을 위한 웹 서비스입니다. �
 | 장애 티켓 관리 | **구현 완료.** 로컬 운영자 로그인, 티켓 등록·검색·조회·수정·상태 전환, 종료 티켓 보관을 지원합니다. |
 | 담당자·후속 작업 관리 | **예정.** 근무조와 담당자를 배정하고, 후속 작업과 운영 메모를 기록하며, 작업 이력을 확인합니다. |
 | SOP 관리·장애 지식 검색 | **구현 완료.** PDF·TXT·Markdown을 등록하고, SOP와 해결 티켓을 검색해 관련 내용과 원본을 확인합니다. |
-| 근거 기반 장애 분석 | **예정.** 검색 결과를 인용해 장애 가설과 진단 단계를 제안합니다. |
+| 근거 기반 장애 분석 | **구현 완료.** Gemini가 조회 도구를 선택하고, 출처가 있는 장애 가설과 진단 단계를 제안합니다. |
 | 교대 인수인계 | **예정.** 미해결 티켓, 미완료 작업, 누락 정보를 모아 보고서 초안을 만들고 근무조 책임자가 검토·승인합니다. |
 
 ## 에이전트 역할
 
-3단계에서 구현할 Gemini 에이전트는 조회 전용 도구로 과거 해결 사례와 SOP를 읽고, 진단 순서와 추가 확인 질문을 제안합니다. 가능한 경우 제안마다 출처를 표시하고, 근거가 부족한 경우 불확실성과 확인 방법을 함께 제시합니다. 교대 시에는 서버가 수집한 티켓과 작업을 바탕으로 인수인계 초안을 작성합니다.
+Gemini 에이전트는 조회 전용 도구로 과거 해결 사례와 SOP를 읽고, 진단 순서와 추가 확인 질문을 제안합니다. 가능한 경우 제안마다 출처를 표시하고, 근거가 부족한 경우 불확실성과 확인 방법을 함께 제시합니다. 교대 인수인계 초안은 4단계에 계획되어 있습니다.
 
 티켓 상태 변경과 실제 인프라 조치는 운영자가 수행하고, 인수인계 보고서는 근무조 책임자가 승인합니다. 담당자나 마감 시각처럼 조건이 명확한 누락 항목은 서버 규칙으로 검사합니다. [에이전트 설계](docs/AGENT.md)
 
 ## 현재 개발 단계
 
-**2단계 · SOP와 해결 티켓 지식 검색**
+**3단계 · Gemini 장애 분석 에이전트**
 
 1단계에서 Docker Compose, 기본 티켓 관리와 운영자 세션을 구성했습니다. 2단계에서 SOP 업로드와 색인, 해결 티켓의 자동 색인, 출처가 있는 pgvector 검색을 추가했습니다.
 
-3단계는 지식 검색을 활용하는 Gemini 장애 분석 에이전트입니다. 근무조 관리와 교대 인수인계는 후속 단계입니다. [단계별 개발 계획](docs/TASKS.md) · [제품 요구사항](docs/PRD.md)
+3단계에서 실제 Gemini 임베딩을 검증하고, 분석 화면과 조회 전용 Function Calling을 추가했습니다. 교대 운영과 인수인계는 4단계입니다. [단계별 개발 계획](docs/TASKS.md) · [제품 요구사항](docs/PRD.md)
 
 ## 개발 실행
 
@@ -57,6 +57,25 @@ docker compose exec -T api python -m app.knowledge.demo --evaluate
 
 개발 Compose는 기본값으로 합성 벡터를 사용합니다. Gemini를 사용하려면 [.env.example](.env.example)에 따라 로컬 `.env`에 `AGENT_PROVIDER=gemini`와 `GEMINI_API_KEY`를 설정하고 `docker compose up -d --build`로 설정을 적용합니다. 기존 자료를 새 프로필로 색인하려면 `docker compose exec -T api python -m app.knowledge.demo --reindex`를 실행합니다. API 키는 worker에 전달됩니다. [API 요청과 응답](docs/API.md)
 
+## AI 장애 분석 시연
+
+로그인 뒤 [AI 장애 분석](http://127.0.0.1:8080/agent)을 열거나 기존 티켓 상세 화면에서 **AI 분석**을 선택합니다. 질문을 제출하면 진행 상태, 검증된 출처와 개발자 패널의 도구 순서를 확인할 수 있습니다. 기본 개발 설정은 `fake`입니다.
+
+실제 검증에는 Git에서 제외되는 로컬 `.env`에 API 키를 저장하고, 가상 자료 전용 Compose 프로젝트를 사용합니다. 아래는 Windows PowerShell 예시입니다.
+
+```powershell
+$env:AGENT_PROVIDER = 'gemini'
+$env:APP_PORT = '18081'
+$env:APP_ORIGIN = 'http://127.0.0.1:18081'
+docker compose -p polytech-agent-eval up -d --build db migrate
+docker compose -p polytech-agent-eval wait migrate
+docker compose -p polytech-agent-eval run --build --rm --no-deps worker python -m app.agent.evaluation --prepare
+docker compose -p polytech-agent-eval run --rm --no-deps worker python -m app.agent.evaluation --challenge-only
+docker compose -p polytech-agent-eval up -d --build --wait
+```
+
+`--prepare`는 티켓과 SOP가 비어 있는 격리 DB를 대상으로 한다. 이후에는 `--prepare` 없이 평가만 재실행할 수 있다. 실제 Gemini 시연은 별도 포트 [18081](http://127.0.0.1:18081/agent)에서 가상 자료로 진행한다. [에이전트 동작과 품질 평가](docs/AGENT.md)
+
 ## 통합 테스트와 빌드
 
 개발 데이터와 구분되는 Compose 프로젝트에서 PostgreSQL을 실제로 사용해 실행한다. 아래 테스트 프로젝트에는 Nginx 포트를 발행하지 않는다.
@@ -67,7 +86,7 @@ docker compose -p polytech-ticket-tests down
 docker build --target build ./frontend
 ```
 
-테스트는 health/readiness, 인증·CSRF, 티켓 CRUD와 상태 전이·보관, SOP 업로드·청킹·검색·삭제, Gemini 오류 처리, Recall@5를 검증한다. Windows Docker Desktop의 격리 DB에서 15개 테스트가 통과했다. 7개 가상 질의의 합성 임베딩 Recall@5는 14/14였다. 실제 Gemini 호출은 계정 키를 설정해 별도로 검증한다. 테스트 볼륨은 반복 실행에 재사용할 수 있다.
+자동 테스트는 PostgreSQL 기반 기존 기능과 모의 Gemini의 다단계 선택, 근거 검증, 권한, 오류 처리를 검증한다. 실제 Gemini 임베딩과 도구 호출은 격리된 가상 자료로 검증한다. 테스트 볼륨은 반복 실행에 재사용할 수 있다.
 
 ## 운영 Compose
 
