@@ -15,7 +15,7 @@ from app.knowledge.indexing import RESOLVED_STATUSES, enqueue_sop, now_utc, sync
 from app.knowledge.models import SopDocument, SourceType
 from app.knowledge.search import search_index, worker_query_vector
 from app.models import Ticket, User
-from app.tickets import apply_changes, record_event
+from app.tickets import TicketStatus, apply_changes, record_event
 
 
 @dataclass(frozen=True)
@@ -89,7 +89,67 @@ SCENARIOS = [
 ]
 
 
-def seed(username: str) -> tuple[int, int]:
+@dataclass(frozen=True)
+class DemoIncident:
+    key: str
+    service: str
+    title: str
+    symptoms: str
+    next_action: str
+    severity: str
+    status: TicketStatus
+    resolution: str | None = None
+
+
+DEMO_INCIDENTS = [
+    DemoIncident("net-01", "SIM-EDGE", "네트워크 링크 재연결과 CRC 오류", "가상 스위치 포트의 CRC 카운터가 증가하고 5분 간격으로 링크가 끊겼다.", "교체 후 포트 카운터와 링크 유지 시간을 확인한다.", "P2", TicketStatus.RESOLVED, "모의 케이블 교체 후 링크가 유지됐고 CRC 카운터 증가가 멈췄다."),
+    DemoIncident("net-02", "SIM-EDGE", "네트워크 링크 불안정과 패킷 손실", "가상 API 요청 일부가 시간 초과됐고 스위치에서 링크 다운과 CRC 오류가 함께 관측됐다.", "스위치 포트와 연결 경로별 CRC 카운터를 대조한다.", "P1", TicketStatus.IN_PROGRESS),
+    DemoIncident("net-03", "SIM-EDGE", "업링크 패킷 손실과 큐 드롭", "부하가 높은 시간에 패킷 손실이 발생했다. 링크 다운이나 CRC 오류는 관측되지 않았다.", "피크 시간의 송신 큐 점유율과 드롭 카운터를 수집한다.", "P3", TicketStatus.OPEN),
+    DemoIncident("disk-01", "SIM-STORAGE", "디스크 SMART 경고와 RAID 배열 성능 저하", "모의 백업 작업 중 SMART 경고가 반복되고 RAID 배열이 저하 상태로 전환됐다.", "배열 상태와 백업 읽기 검증 결과를 확인한다.", "P2", TicketStatus.CLOSED, "가상 디스크 교체와 RAID 재구축을 끝냈고 백업 읽기 검증을 통과했다."),
+    DemoIncident("disk-02", "SIM-STORAGE", "RAID 저하와 SMART 불량 섹터 증가", "가상 디스크 3번에서 불량 섹터가 늘고 배열 읽기 지연이 증가했다.", "모의 교체 디스크 준비 상태와 검증된 백업 시점을 확인한다.", "P2", TicketStatus.WAITING),
+    DemoIncident("disk-03", "SIM-STORAGE", "RAID 읽기 지연과 백업 처리량 저하", "가상 백업 구간에 읽기 지연이 늘었으며 SMART 경고와 배열 구성원 이탈은 관측되지 않았다.", "백업 동시 실행 수와 디스크 큐 길이를 비교한다.", "P3", TicketStatus.IN_PROGRESS),
+    DemoIncident("mem-01", "SIM-COMPUTE", "DIMM 슬롯 B2 ECC 교정 오류 누적", "가상 시스템에서 ECC 교정 오류가 같은 DIMM 슬롯에 집중됐다.", "부하 시험 후 슬롯별 카운터를 기록한다.", "P2", TicketStatus.RESOLVED, "모의 DIMM 교체 뒤 메모리 진단을 통과했고 ECC 카운터 증가가 멈췄다."),
+    DemoIncident("mem-02", "SIM-COMPUTE", "DIMM 슬롯 A1 ECC 오류와 재부팅", "메모리 부하가 높은 동안 가상 호스트가 재부팅됐다. A1 슬롯에 ECC 오류가 기록됐다.", "재부팅 직전 로그와 슬롯별 메모리 진단 결과를 대조한다.", "P1", TicketStatus.IN_PROGRESS),
+    DemoIncident("mem-03", "SIM-COMPUTE", "간헐적인 ECC 교정 오류 알림", "가상 장비에서 ECC 교정 오류가 한 번 발생했으며 서비스 응답 시간은 정상이다.", "다음 모의 점검 창에 슬롯별 카운터를 다시 측정한다.", "P4", TicketStatus.WAITING),
+    DemoIncident("cpu-01", "SIM-BATCH", "CPU 사용률 급증과 배치 대기열 적체", "가상 배치를 동시에 실행하자 CPU 사용률과 처리 대기열이 함께 증가했다.", "동시 실행량 변경 후 대기열 해소 시간을 측정한다.", "P3", TicketStatus.RESOLVED, "모의 배치 동시 실행량을 줄인 뒤 CPU 사용률과 대기열이 정상 범위로 돌아왔다."),
+    DemoIncident("cpu-02", "SIM-BATCH", "CPU 포화와 배치 처리 지연", "가상 배치 시작 직후 CPU 사용률이 95%를 넘었고 대기열이 계속 늘었다.", "프로세스별 CPU 사용량과 배치 동시 실행 수를 비교한다.", "P2", TicketStatus.OPEN),
+    DemoIncident("cpu-03", "SIM-BATCH", "배치 처리 지연과 CPU 대기 시간 증가", "처리 시간이 늘었지만 CPU 실행 시간보다 디스크 I/O 대기 시간이 크게 증가했다.", "디스크 지연과 배치 읽기 요청량이 함께 증가하는지 확인한다.", "P3", TicketStatus.OPEN),
+]
+
+
+def seed_demo_incidents(username: str) -> int:
+    added = 0
+    with Session(engine(), expire_on_commit=False) as db:
+        actor = db.scalar(select(User).where(User.username == username, User.is_active.is_(True)))
+        if actor is None:
+            raise SystemExit("Active seed operator not found. Use --username.")
+        for incident in DEMO_INCIDENTS:
+            ticket_id = uuid5(NAMESPACE_URL, f"polytech-ai-agent/demo/incidents/{incident.key}")
+            if db.get(Ticket, ticket_id) is not None:
+                continue
+            detected = now_utc() - timedelta(days=2)
+            ticket = Ticket(
+                id=ticket_id, title=f"[가상 장애] {incident.title}", description=incident.symptoms,
+                service=incident.service, severity=incident.severity, status=TicketStatus.OPEN,
+                detected_at=detected, next_action=incident.next_action, created_by=actor.id,
+                version=1, created_at=detected, updated_at=detected,
+            )
+            db.add(ticket)
+            db.flush()
+            record_event(db, ticket, actor.id, "created", {"synthetic": True})
+            if incident.resolution:
+                apply_changes(db, ticket, actor.id, "transitioned", {
+                    "status": TicketStatus.RESOLVED, "resolution": incident.resolution,
+                    "resolved_at": detected + timedelta(hours=1),
+                }, reason="가상 복구 검증 완료")
+            if ticket.status != incident.status:
+                apply_changes(db, ticket, actor.id, "transitioned", {"status": incident.status}, reason="가상 장애 처리 단계 반영")
+            db.commit()
+            added += 1
+    return added
+
+
+def seed(username: str, *, sop_only: bool = False) -> tuple[int, int]:
     tickets = 0
     documents = 0
     with Session(engine(), expire_on_commit=False) as db:
@@ -98,7 +158,7 @@ def seed(username: str) -> tuple[int, int]:
             raise SystemExit("Active seed operator not found. Use --username.")
         for case in SCENARIOS:
             ticket_id = uuid5(NAMESPACE_URL, f"polytech-ai-agent/demo/tickets/{case.key}")
-            if db.get(Ticket, ticket_id) is None:
+            if not sop_only and db.get(Ticket, ticket_id) is None:
                 past = now_utc() - timedelta(days=7)
                 ticket = Ticket(
                     id=ticket_id, title=case.ticket_title, description=case.symptoms, service=f"SIM-{case.key}",
@@ -123,6 +183,7 @@ def seed(username: str) -> tuple[int, int]:
                     payload=payload, title=case.sop_title,
                 )
                 documents += 1
+        db.commit()
     return documents, tickets
 
 
@@ -163,14 +224,18 @@ def main() -> None:
     actions = parser.add_mutually_exclusive_group()
     actions.add_argument("--reindex", action="store_true", help="Queue all existing SOPs and resolved tickets")
     actions.add_argument("--evaluate", action="store_true", help="Measure Recall@5 after the demo data is indexed")
+    actions.add_argument("--sop-only", action="store_true", help="Add synthetic SOPs without creating demo tickets")
+    actions.add_argument("--demo-incidents", action="store_true", help="Add 12 related incidents across multiple ticket statuses")
     parser.add_argument("--username", default="demo", help="An existing operator for synthetic records")
     args = parser.parse_args()
     if args.reindex:
         print(f"Sources queued or in progress: {reindex_existing()}")
     elif args.evaluate:
         evaluate()
+    elif args.demo_incidents:
+        print(f"Synthetic demo incidents added: {seed_demo_incidents(args.username.strip().casefold())}")
     else:
-        documents, tickets = seed(args.username.strip().casefold())
+        documents, tickets = seed(args.username.strip().casefold(), sop_only=args.sop_only)
         print(f"Synthetic records added: SOP={documents}, tickets={tickets}")
 
 

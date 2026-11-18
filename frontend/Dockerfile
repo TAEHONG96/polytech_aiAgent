@@ -18,6 +18,12 @@ COPY nginx/proxy.conf /etc/nginx/polytech/proxy.conf
 FROM proxy AS local
 COPY nginx/local.conf /etc/nginx/conf.d/default.conf
 
-FROM proxy AS production
-COPY nginx/production.conf /etc/nginx/conf.d/default.conf
+FROM proxy AS static
+COPY nginx/static.conf /etc/nginx/polytech/static.conf
 COPY --from=build /web/dist /usr/share/nginx/html
+
+FROM static AS production
+COPY nginx/production.conf /etc/nginx/conf.d/default.conf
+
+FROM static AS tunnel
+COPY nginx/tunnel.conf /etc/nginx/conf.d/default.conf

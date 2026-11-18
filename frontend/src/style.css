@@ -11,6 +11,7 @@ a { color: #1455a4; }
 button, input, textarea, select { font: inherit; }
 header { background: #14283f; color: #fff; }
 header a { color: #fff; }
+header a[aria-current="page"] { text-underline-offset: .3em; font-weight: 750; }
 nav { min-height: 4rem; justify-content: space-between; }
 .shell { width: min(1100px, 100% - 2rem); margin-inline: auto; }
 main { padding-block: 2rem 4rem; }
@@ -23,6 +24,11 @@ h2 { font-size: 1.2rem; }
 .heading { align-items: flex-start; justify-content: space-between; margin-bottom: 1rem; }
 .surface { border: 1px solid #d4dce5; border-radius: .55rem; padding: 1.25rem; background: #fff; margin-bottom: 1rem; }
 .narrow { max-width: 46rem; }
+.demo-account { background: #eef3f8; border-radius: .4rem; padding: .9rem 1rem; margin-bottom: 1rem; }
+.demo-account h2 { margin-bottom: .45rem; }
+.demo-account .meta { margin: .65rem 0 0; }
+.feature-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(100%, 20rem), 1fr)); gap: 1rem; }
+.feature-grid .surface, .feature-grid p { margin-bottom: 0; }
 .meta { color: #526276; margin-bottom: .25rem; font-size: .875rem; }
 form { display: grid; gap: .9rem; }
 .filters { grid-template-columns: 2fr repeat(3, minmax(6rem, 1fr)) auto; align-items: end; margin-bottom: 1rem; }

@@ -4,6 +4,7 @@ import { defineConfig } from 'vite'
 export default defineConfig({
   plugins: [react()],
   server: {
+    allowedHosts: ['.trycloudflare.com'],
     watch: { usePolling: process.platform === 'linux' },
   },
 })

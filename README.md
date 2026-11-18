@@ -55,6 +55,10 @@ docker compose exec -T api python -m app.knowledge.demo --evaluate
 
 첫 명령은 7개 가상 시나리오의 SOP와 해결 티켓을 추가합니다. 반복 실행은 같은 자료를 추가하지 않습니다. 로그인 후 [SOP 문서](http://127.0.0.1:8080/knowledge)에서 처리 상태를 확인하고, 색인이 완료되면 [지식 검색](http://127.0.0.1:8080/knowledge/search)에서 ‘서버 부팅 실패와 메인보드 오류’를 검색하세요. 평가 명령은 색인 완료 뒤 시나리오별 적중 건수와 출처 단위 Recall@5를 출력합니다.
 
+SOP만 등록하려면 `docker compose exec -T api python -m app.knowledge.demo --sop-only`를 실행합니다. 원본 파일은 API와 worker가 공유하는 `sop_files` 볼륨에, 문서 메타데이터와 검색 색인은 PostgreSQL의 `db_data` 볼륨에 저장됩니다. 컨테이너를 재생성해도 프로젝트 이름을 유지하면 두 볼륨을 다시 사용합니다. `docker compose down -v`는 두 볼륨을 삭제합니다.
+
+`docker compose exec -T api python -m app.knowledge.demo --demo-incidents`는 네트워크, 스토리지, 메모리, 배치 처리의 유사 장애 티켓 12건을 추가합니다. 해결·종료 이력은 지식 검색의 출처가 됩니다. 진행 중인 `네트워크 링크 불안정과 패킷 손실` 티켓에서 AI 분석을 실행하면 관련 해결 이력과 SOP를 함께 확인할 수 있습니다.
+
 개발 Compose는 기본값으로 합성 벡터를 사용합니다. Gemini를 사용하려면 [.env.example](.env.example)에 따라 로컬 `.env`에 `AGENT_PROVIDER=gemini`와 `GEMINI_API_KEY`를 설정하고 `docker compose up -d --build`로 설정을 적용합니다. 기존 자료를 새 프로필로 색인하려면 `docker compose exec -T api python -m app.knowledge.demo --reindex`를 실행합니다. API 키는 worker에 전달됩니다. [API 요청과 응답](docs/API.md)
 
 ## AI 장애 분석 시연
@@ -98,3 +102,7 @@ docker compose --env-file .env.prod -p polytech-prod -f compose.yaml -f compose.
 ```
 
 운영 Nginx는 정적 React 빌드를 제공한다. 외부 포트는 80과 443이다. 방화벽과 TLS 인증서·갱신은 대상 호스트에서 관리한다. 원본 파일은 `sop_files` 볼륨, 메타데이터와 추출 텍스트는 `db_data` 볼륨에 보존된다. 운영 설정의 임베딩 공급자 기본값은 `gemini`다. 백업 시 두 볼륨을 함께 보존한다.
+
+## 공개 프로토타입
+
+고정 HTTPS 주소로 체험판을 공유하려면 [Cloudflare Tunnel 배포 안내](docs/PUBLIC_DEMO.md)를 따른다. 별도 Compose 프로젝트가 전용 DB와 파일 볼륨을 만들고, 장애 분석과 지식 검색은 Fake provider를 사용한다.

@@ -1,3 +1,5 @@
+/// <reference types="vite/client" />
+
 import { StrictMode, useEffect, useState } from 'react'
 import type { FormEvent } from 'react'
 import { createRoot } from 'react-dom/client'
@@ -9,6 +11,7 @@ import { ErrorNotice } from './ui'
 import './style.css'
 
 const priorities: Severity[] = ['P1', 'P2', 'P3', 'P4']
+const showDemoAccount = import.meta.env.VITE_PUBLIC_DEMO === 'true'
 const koreanDate = new Intl.DateTimeFormat('ko-KR', {
   timeZone: 'Asia/Seoul', dateStyle: 'medium', timeStyle: 'short',
 })
@@ -43,12 +46,53 @@ function Login({ onLogin }: { onLogin: (session: Session) => void }) {
   return (
     <section className="surface narrow">
       <h1>운영자 로그인</h1>
+      {showDemoAccount && <aside className="demo-account" aria-labelledby="demo-account-title">
+        <h2 id="demo-account-title">시연용 데모 계정</h2>
+        <dl className="details">
+          <div><dt>사용자명</dt><dd><code>demo</code></dd></div>
+          <div><dt>비밀번호</dt><dd><code>local-demo-password</code></dd></div>
+        </dl>
+        <p className="meta">공용 계정입니다. 시연에는 합성 데이터만 사용해 주세요.</p>
+      </aside>}
       <ErrorNotice message={error} />
       <form onSubmit={submit}>
         <label>사용자명<input name="username" autoComplete="username" maxLength={64} required /></label>
         <label>비밀번호<input name="password" type="password" autoComplete="current-password" required /></label>
         <button disabled={busy}>로그인</button>
       </form>
+    </section>
+  )
+}
+
+const features = [
+  { href: '/tickets', title: '장애 티켓', description: '장애를 등록하고 우선순위, 상태, 담당 정보를 관리합니다. 처리 이력과 해결 내용을 티켓에서 확인할 수 있습니다.' },
+  { href: '/knowledge', title: 'SOP 문서', description: '운영 절차 문서를 등록하고 색인 상태를 확인합니다. 준비된 가상 SOP의 원본도 내려받을 수 있습니다.' },
+  {
+    href: '/knowledge/search',
+    title: '지식 검색',
+    description: 'RAG(검색 증강 생성)의 검색 단계를 활용합니다. SOP와 해결·종료 티켓을 텍스트 조각으로 나누어 임베딩하고, 장애 증상이나 오류 메시지를 입력하면 pgvector의 코사인 유사도로 관련 문서와 티켓의 원문 구절을 찾아 보여줍니다.',
+  },
+  {
+    href: '/agent',
+    title: 'AI 장애 분석',
+    description: 'Gemini 에이전트는 함수 호출(Function Calling)로 티켓 상세·변경 이력을 조회하고, SOP와 유사 해결 티켓을 검색합니다. 수집한 출처를 인용해 확인된 사실, 원인 가설, 점검 순서를 분석 초안으로 정리합니다. 이 시연 환경에서는 모의 공급자로 도구 호출과 분석 흐름을 체험할 수 있습니다.',
+  },
+]
+
+function About({ signedIn }: { signedIn: boolean }) {
+  return (
+    <section aria-labelledby="about-title">
+      <div className="surface">
+        <h1 id="about-title">IT 운영 지원 소개</h1>
+        <p>장애 접수부터 운영 절차 검색, 분석 초안 검토까지 한곳에서 진행합니다.</p>
+        {!signedIn && <a className="button" href="/login">로그인하고 체험하기</a>}
+      </div>
+      <div className="feature-grid">
+        {features.map(({ href, title, description }) => <article className="surface" key={href}>
+          <h2>{signedIn ? <a href={href}>{title}</a> : title}</h2>
+          <p>{description}</p>
+        </article>)}
+      </div>
     </section>
   )
 }
@@ -283,13 +327,15 @@ function App() {
       <header><nav className="shell row">
         <div className="row">
           <a className="brand" href="/tickets">IT 운영 지원</a>
+          <a href="/about" aria-current={path === '/about' ? 'page' : undefined}>소개</a>
           {session && <><a href="/tickets">장애 티켓</a><a href="/knowledge">SOP 문서</a><a href="/knowledge/search">지식 검색</a><a href="/agent">AI 장애 분석</a></>}
         </div>
         {session && <div className="row account"><span>{session.user.display_name}</span><button className="secondary" onClick={logout}>로그아웃</button></div>}
       </nav></header>
       <main className="shell">
         <ErrorNotice message={error} />
-        {session === undefined ? <p role="status">세션을 확인하는 중입니다.</p>
+        {path === '/about' ? <About signedIn={Boolean(session)} />
+          : session === undefined ? <p role="status">세션을 확인하는 중입니다.</p>
           : !session ? <Login onLogin={setSession} />
           : path === '/agent' ? <AgentPage session={session} />
           : path === '/knowledge/search' ? <KnowledgeSearch session={session} />

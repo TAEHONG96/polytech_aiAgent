@@ -1,0 +1,40 @@
+x-public-env: &public-env
+  APP_ENV: production
+  APP_ORIGIN: ${APP_ORIGIN:?Set the public HTTPS APP_ORIGIN}
+  APP_CSRF_SECRET: ${APP_CSRF_SECRET:?Set APP_CSRF_SECRET}
+
+services:
+  db:
+    environment:
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?Set POSTGRES_PASSWORD}
+      APP_DB_PASSWORD: ${APP_DB_PASSWORD:?Set APP_DB_PASSWORD}
+  migrate:
+    environment:
+      <<: *public-env
+      APP_DB_PASSWORD: ${POSTGRES_PASSWORD:?Set POSTGRES_PASSWORD}
+      APP_AUTH_USERNAME: ${APP_AUTH_USERNAME:-demo}
+      APP_BOOTSTRAP_PASSWORD: ${APP_BOOTSTRAP_PASSWORD:?Set APP_BOOTSTRAP_PASSWORD}
+  api:
+    environment:
+      <<: *public-env
+      APP_DB_PASSWORD: ${APP_DB_PASSWORD:?Set APP_DB_PASSWORD}
+      AGENT_PROVIDER: fake
+  worker:
+    environment:
+      APP_DB_PASSWORD: ${APP_DB_PASSWORD:?Set APP_DB_PASSWORD}
+      AGENT_PROVIDER: fake
+      GEMINI_API_KEY: ""
+    networks: !override [data]
+  nginx:
+    build:
+      target: tunnel
+  cloudflared:
+    image: cloudflare/cloudflared:2026.11.0
+    command: ["tunnel", "--no-autoupdate", "run"]
+    environment:
+      TUNNEL_TOKEN: ${TUNNEL_TOKEN:?Set TUNNEL_TOKEN}
+    networks: [ingress]
+    depends_on:
+      nginx:
+        condition: service_started
+    restart: unless-stopped

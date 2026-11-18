@@ -8,6 +8,8 @@ services:
     build:
       context: ./frontend
       target: development
+    environment:
+      VITE_PUBLIC_DEMO: ${VITE_PUBLIC_DEMO:-false}
     volumes:
       - ./frontend/src:/web/src:ro
       - ./frontend/index.html:/web/index.html:ro
