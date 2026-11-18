@@ -1,21 +1,21 @@
-# Python virtual environments and bytecode
+# Python
 .venv/
 venv/
 __pycache__/
 *.py[cod]
-
-# Test and coverage output
 .pytest_cache/
 .coverage
 .coverage.*
 htmlcov/
 
-# Local environment configuration
+# Frontend artifacts
+node_modules/
+dist/
+
+# Local environment
 .env
 .env.*
 !.env.example
 !.env.sample
 !.env.template
-
-# Local AWS configuration and credentials
 .aws/

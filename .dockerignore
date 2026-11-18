@@ -1,4 +1,9 @@
 .git
 .venv
+venv
 **/__pycache__
 .pytest_cache
+.env
+.env.*
+**/node_modules
+**/dist
