@@ -7,6 +7,8 @@ import { api, ApiError, errorMessage, statuses } from './api'
 import type { Session, Severity, Status, Ticket, TicketPage } from './api'
 import { AgentPage } from './agent'
 import { KnowledgeSearch, SopDetail, SopList } from './knowledge'
+import { HandoverDashboard, HandoverDetail } from './handover'
+import { TicketOperations } from './ticket-operations'
 import { ErrorNotice } from './ui'
 import './style.css'
 
@@ -77,6 +79,7 @@ const features = [
     title: 'AI 장애 분석',
     description: 'Gemini 에이전트는 함수 호출(Function Calling)로 티켓 상세·변경 이력을 조회하고, SOP와 유사 해결 티켓을 검색합니다. 수집한 출처를 인용해 확인된 사실, 원인 가설, 점검 순서를 분석 초안으로 정리합니다. 이 시연 환경에서는 모의 공급자로 도구 호출과 분석 흐름을 체험할 수 있습니다.',
   },
+  { href: '/handovers', title: '교대 인수인계', description: '교대 회차별 티켓과 작업 기록을 검토하고, 인계조 확정과 인수조 확인을 남깁니다.' },
 ]
 
 function About({ signedIn }: { signedIn: boolean }) {
@@ -292,6 +295,9 @@ function TicketDetail({ id, edit, session }: { id: string; edit: boolean; sessio
           </div>
         </form>
       </section>}
+      <TicketOperations ticket={ticket} session={session} onVersion={version => {
+        setTicket(current => current ? { ...current, version } : current)
+      }} />
     </>
   )
 }
@@ -301,6 +307,7 @@ function App() {
   const [error, setError] = useState('')
   const path = window.location.pathname
   const detail = /^\/tickets\/([^/]+)(\/edit)?$/.exec(path)
+  const handover = /^\/handovers\/([^/]+)$/.exec(path)
 
   const sopDetail = /^\/knowledge\/([^/]+)$/.exec(path)
 
@@ -328,7 +335,7 @@ function App() {
         <div className="row">
           <a className="brand" href="/tickets">IT 운영 지원</a>
           <a href="/about" aria-current={path === '/about' ? 'page' : undefined}>소개</a>
-          {session && <><a href="/tickets">장애 티켓</a><a href="/knowledge">SOP 문서</a><a href="/knowledge/search">지식 검색</a><a href="/agent">AI 장애 분석</a></>}
+          {session && <><a href="/tickets">장애 티켓</a><a href="/knowledge">SOP 문서</a><a href="/knowledge/search">지식 검색</a><a href="/agent">AI 장애 분석</a><a href="/handovers" aria-current={path.startsWith('/handovers') ? 'page' : undefined}>교대 인수인계</a></>}
         </div>
         {session && <div className="row account"><span>{session.user.display_name}</span><button className="secondary" onClick={logout}>로그아웃</button></div>}
       </nav></header>
@@ -338,6 +345,8 @@ function App() {
           : session === undefined ? <p role="status">세션을 확인하는 중입니다.</p>
           : !session ? <Login onLogin={setSession} />
           : path === '/agent' ? <AgentPage session={session} />
+          : path === '/handovers' ? <HandoverDashboard session={session} />
+          : handover ? <HandoverDetail id={handover[1]} session={session} />
           : path === '/knowledge/search' ? <KnowledgeSearch session={session} />
           : path === '/knowledge' ? <SopList session={session} />
           : sopDetail ? <SopDetail id={sopDetail[1]} session={session} />

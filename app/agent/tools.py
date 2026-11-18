@@ -45,10 +45,10 @@ SPECS = {
 }
 
 
-def tool_declaration() -> types.Tool:
+def tool_declaration(specs=SPECS) -> types.Tool:
     return types.Tool(function_declarations=[
         types.FunctionDeclaration(name=name, description=description, parameters_json_schema=schema.model_json_schema())
-        for name, (schema, description) in SPECS.items()
+        for name, (schema, description) in specs.items()
     ])
 
 

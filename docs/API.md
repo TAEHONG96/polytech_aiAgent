@@ -6,11 +6,11 @@
 
 - 업무 경로는 `/api/v1` 아래에 둔다. 아래 표는 접두사를 생략했다. 기존 `GET /health`는 그대로 200과 `{"status":"ok"}`를 반환한다.
 - UUID와 RFC 3339 시간(오프셋 필수), JSON을 사용한다. `PATCH`에서 빠진 필드는 유지하고 명시적 `null`은 nullable 필드만 지운다. 입력의 알려지지 않은 필드는 거부한다.
-- 목록 응답은 `{items, next_cursor}`를 사용한다. `limit` 기본 25, 최대 100. 커서는 필터와 정렬을 포함한 불투명 값이다. 티켓 목록은 `updated_at DESC, id DESC`, 이력은 버전 역순, 다른 목록은 생성 시각 및 ID 역순을 기본으로 한다.
+- 티켓·SOP 목록은 `{items, next_cursor}`를 사용한다. 인수인계 목록은 `{items, next_before}`를 사용한다. `limit`은 기본 25, 최대 100이다. 티켓 목록은 `updated_at DESC, id DESC`, 인수인계 목록은 `created_at DESC, id DESC`로 정렬한다.
 - 오류는 `{error:{code,message,details,request_id}}`로 통일한다. 401 세션 없음·만료, 403 권한·CSRF 실패, 404 누락 또는 조회할 수 없는 리소스, 409 버전·전이·인계 자료 충돌, 422 잘못된 입력, 429 속도 제한, 503 DB 또는 작업 인프라 불가를 나타낸다. 모든 응답에 `X-Request-ID`를 포함한다. [FastAPI 예외 처리](https://fastapi.tiangolo.com/tutorial/handling-errors/)
 - 로그인 성공 시 세션 쿠키와 CSRF 값을 응답한다. 같은 출처의 `GET /auth/session`은 새로 고침 후 CSRF 값을 돌려준다. 로그인은 `Origin`을 검사하고 인증 이후 쓰기 요청은 `Origin`과 `X-CSRF-Token`을 검사한다. 개발 기본 환경은 루프백 HTTP, 운영 환경은 TLS 쿠키다.
 - 티켓과 보고서 변경은 `expected_version`을 받는다. 상태 변경·배정·메모·작업은 동일 티켓 버전을 공유한다. `DELETE`는 `expected_version` 쿼리 인자를 받는다. 버전이 변경되면 409 `VERSION_CONFLICT`와 현재 버전을 반환한다.
-- 장애 분석은 사용자당 진행 중인 실행 한 건을 허용한다. 중복 요청에는 409와 기존 실행 ID를 반환한다. 향후 인수인계는 보고서 버전으로 중복 갱신을 제어한다.
+- 장애 분석과 인수인계 분석은 사용자당 진행 중인 실행 한 건을 공유한다. 인수인계 분석은 보고서당 진행 중인 실행도 한 건으로 제한한다.
 
 ## 인증과 교대 조회
 
@@ -19,28 +19,29 @@
 | `POST /auth/login` | `username, password` → 200 사용자, 역할·소속, CSRF 값과 쿠키 | 익명 |
 | `GET /auth/session` | 200 사용자, 역할·소속·CSRF 값 | 인증 사용자 |
 | `POST /auth/logout` | 204 세션 폐기 및 쿠키 제거 | 인증 사용자 |
-| `GET /shift-instances` | `from, to, team_id` 필터, 200 회차·조·다음 회차 ID. 필터 생략 시 현재·직전·다음 회차 반환 | 인증 사용자 |
-| `GET /shift-instances/{id}/members` | 200 활성 조원, 표시 이름, 역할 | 인증 사용자 |
-| `GET /shift-instances/{id}/handoff-preview` | 200 현재/직전 인계 회차의 대상 티켓·작업·누락 정보, 이월 표시, 인수 회차. 직후 회차가 없으면 409 `HANDOFF_SHIFT_MISSING` | 인증 사용자 |
+| `GET /shift-instances` | 200 `{items}`, 최근 100개 회차의 조·시작·종료·IANA 시간대 및 요청자의 `is_member, is_lead` | 인증 사용자 |
+| `GET /handover-operators` | 200 `{items}`, 활성 운영자의 ID, 표시 이름, 소속 조 ID | 인증 사용자 |
+| `GET /shift-instances/{id}/handover-preview` | 200 자동 선정 티켓·작업·누락 정보, 인계·인수 회차 및 캡처 시각. 적합한 직후 회차가 없으면 409 `INVALID_INCOMING_SHIFT` | 인증 사용자 |
 | `GET /ready` | 200 DB·스키마 준비, 503 의존성 미준비 | 내부 운영 점검 |
+
+인수인계 권한은 활성 세션의 사용자와 DB에 등록된 근무조 소속으로 판단한다. 화면은 회차별 `is_member, is_lead` 및 보고서 상세의 `permissions`를 사용한다.
 
 ## 티켓과 후속 작업
 
 | 메서드와 경로 | 요청·응답 |
 | --- | --- |
-| `POST /tickets` | 필수 `title, description, service, severity, detected_at`, 선택 `impact, shift_instance_id, assignee_id, next_action` → 201 티켓 |
-| `GET /tickets` | `q, status, severity, shift_instance_id, assignee_id, scope` 및 커서. 미배정 회차는 `shift_instance_id=unassigned`로 지정한다. `scope=active\|archived\|all`이며 `active`는 비보관 전체(종료 포함) → 200 목록 |
-| `GET /tickets/{id}` | 200 필드, 버전, 허용 전이, 활성 작업·누락 개수. 보관 티켓은 읽기 전용이다. |
-| `PATCH /tickets/{id}` | 버전 + 편집 필드 및 배정 → 200 티켓. 상태, 해결 필드, 보관 필드는 전용 경로에서 처리한다. |
+| `POST /tickets` | 필수 `title, description, service, severity, detected_at`, 선택 `impact, next_action` → 201 티켓 |
+| `GET /tickets` | `q, status, severity, scope` 및 커서. `scope=active\|archived\|all`이며 `active`는 비보관 전체(종료 포함) → 200 목록 |
+| `GET /tickets/{id}` | 200 티켓 필드, 버전, 허용 전이. 보관 티켓은 읽기 전용이다. |
+| `PATCH /tickets/{id}` | 버전 + 편집 필드 → 200 티켓. 담당 회차와 운영 정보는 `/operations`에서 관리한다. |
 | `POST /tickets/{id}/transitions` | `expected_version, to_status, reason`, 해결 시 `resolution` → 200 티켓 |
 | `DELETE /tickets/{id}` | `closed` 및 미완료 작업 없음 확인 후 보관 → 204. 보관 완료된 티켓의 재시도는 204. |
-| `GET /tickets/{id}/events` | 200 작성자·시각·이벤트 유형·허용 필드의 변경 내용 |
-| `POST /tickets/{id}/notes` | `expected_version, body` → 201 이벤트와 새 티켓 버전 |
-| `GET /tickets/{id}/tasks` | 200 작업 목록과 티켓 버전 |
-| `POST /tickets/{id}/tasks` | `expected_version, title` 및 선택 `assignee_id, due_at, note` → 201 초기 `todo` 작업과 새 티켓 버전 |
-| `PATCH /tickets/{id}/tasks/{task_id}` | `expected_version` 및 작업 필드·상태 → 200 작업과 새 티켓 버전 |
+| `GET /tickets/{id}/operations` | 200 담당 회차, 담당자, 주의사항, 승인 필요 여부, 작업, 변경 이력 및 버전 |
+| `PUT /tickets/{id}/operations` | `expected_version, shift_instance_id, owner_id, warnings, approval_required` → 200 교대 업무 정보. 생략·`null`은 미지정 |
+| `POST /tickets/{id}/work` | `expected_version, title, status` 및 선택 `owner_id, due_at, note` → 201 갱신된 교대 업무 정보 |
+| `PUT /tickets/{id}/work/{work_id}` | 등록과 동일한 필드 → 200 갱신된 교대 업무 정보 |
 
-모든 티켓 경로는 인증이 필요하다. 단일 조직에서 운영자와 책임자는 티켓을 조회·편집할 수 있다. 입력 한도 초깃값은 제목 160자, 서비스 80자, 설명 10,000자, 메모·해결·다음 조치 4,000자, 검색어 200자이다. 빈 값은 트림 후 검사한다. 티켓과 작업 담당자는 활성 사용자여야 하며, 티켓 담당자는 지정 회차의 소속 검사를 받는다. 후속 작업은 `todo`, `in_progress`, `blocked` 사이를 오갈 수 있고 `done`이나 `cancelled` 전환 시 결과·사유 메모가 필요하다. 완료 또는 취소 후 후속 작업은 새 작업으로 등록한다.
+모든 티켓 경로는 인증이 필요하다. 단일 조직에서 운영자와 책임자는 티켓을 조회·편집할 수 있다. 입력 한도는 제목 160자, 서비스 80자, 설명 10,000자, 메모·해결·다음 조치 4,000자, 검색어 200자다. 티켓과 작업 담당자는 활성 사용자여야 하며, 티켓 담당자는 지정 회차의 소속 검사를 받는다. 작업 상태는 `todo`, `in_progress`, `blocked`, `done`이다. 승인 필요 여부는 `true`, `false`, 미확인 `null`이다.
 
 ### 티켓 상태 전이
 
@@ -52,7 +53,7 @@
 | `resolved` | `closed`, `in_progress` | 종료는 미완료 작업이 없어야 한다. 재개는 사유를 기록하고 현재 해결 필드를 초기화한다. |
 | `closed` | `in_progress` | 재개 사유를 기록하고 현재 해결 필드를 초기화한다. 보관된 티켓은 재개할 수 없다. |
 
-모든 전이에 사유를 기록한다. `resolved`에서 미완료 작업을 추적할 수 있다. `closed`에서는 새 작업 생성 또는 활성화가 금지된다. `recheck_at`은 대기 상태 이후 보완할 수 있다.
+모든 전이에 사유를 기록한다. `resolved`에서도 미완료 작업을 추적한다. `closed` 티켓의 작업은 `done` 상태로만 기록할 수 있다. `recheck_at`은 티켓 수정 API에서 보완할 수 있다.
 
 ## SOP와 지식 검색
 
@@ -100,17 +101,22 @@
 
 조회 응답의 `status`는 `queued`, `running`, `succeeded`, `failed` 중 하나다. `result`는 `summary`, `confirmed_facts`, `hypotheses`, `diagnostic_steps`, `additional_information`, `limitations`, `evidence`를 포함한다. `tool_calls`에는 순서, 도구명, 상태, 검증된 요약, 근거 키와 소요 시간이 표시된다. 실패는 `error.code`, `error.message`, `error.retryable`로 전달된다. [도구와 응답 검증](AGENT.md)
 
-## 인수인계 설계
+## 인수인계
 
 | 메서드와 경로 | 요청·응답 | 권한·조건 |
 | --- | --- | --- |
-| `GET /handoffs` | 회차·상태 필터와 커서 → 200 목록 | 인증 사용자 |
-| `POST /handoffs` | `outgoing_shift_id`와 멱등 키 → 202 `{handoff_id,version,run_id,status}`, AI 실행 Location | 인계조 소속. 수동 편집 가능한 초기 초안·스냅샷과 AI 실행을 함께 기록한다. 이미 생성된 보고서에 다른 요청을 하면 409와 기존 ID를 반환한다. |
-| `GET /handoffs/{id}` | 200 최신 리비전, 스냅샷, 본문·확인 항목, 최근 실행 ID, 승인 정보 | 인증 사용자 |
-| `PATCH /handoffs/{id}` | 버전, 편집 본문, 누락 정보별 확인 사유 → 200 보고서 | 인계조 소속, 초안만 |
-| `POST /handoffs/{id}/regenerate` | 버전, `confirm_replace=true`, 멱등 키 → 202 실행 ID와 갱신한 보고서 버전 | 인계조 소속, 초안만. 기존 리비전을 보존하고 새 스냅샷과 수동 편집용 기본 내용으로 갱신한다. |
-| `POST /handoffs/{id}/approve` | `expected_version` → 200 승인된 보고서 | 인계조 책임자. 스냅샷이 현재와 다르면 409 `HANDOFF_STALE`. 미확인 누락 정보 또는 인계 요약 미입력은 422. |
+| `GET /handovers` | 선택 `outgoing_shift_id, status, before, limit` → 200 `{items, next_before}` | 인증 사용자 |
+| `POST /handovers` | `outgoing_shift_id`, 선택 `incoming_shift_id, include_ticket_ids, exclude_ticket_ids` → 201 `DRAFT` 보고서 및 `Location` | 시작한 회차의 인계조 구성원 |
+| `GET /handovers/{id}` | 200 현재 본문·집계·스냅샷·확인 항목, 최신 분석 결과·도구 호출·사용량, 이력 및 요청자 권한 | 인증 사용자 |
+| `POST /handovers/{id}/analyze` | `expected_version` → 202 실행과 보고서 `Location`. 상세의 `analysis`를 폴링 | 인계조 구성원, `DRAFT` |
+| `PUT /handovers/{id}` | `expected_version`, 선택 `body, selection, refresh_snapshot, status` → 200 보고서 | 인계조 구성원, `DRAFT` 또는 `READY` |
+| `POST /handovers/{id}/confirm` | `expected_version` → 200 `CONFIRMED` | 인계조 책임자, `READY` |
+| `POST /handovers/{id}/acknowledge` | `expected_version` → 200 `ACKNOWLEDGED` | 인수조 구성원, `CONFIRMED` |
+| `POST /handovers/{id}/revisions` | `expected_version` → 201 원본 확정본을 참조하는 새 `DRAFT` 및 `Location` | 인계조 구성원, `CONFIRMED` 또는 `ACKNOWLEDGED`, 후속 버전 미생성 상태 |
+| `GET /handovers/{id}/revisions/{version}` | 200 해당 리비전의 본문과 스냅샷 | 인증 사용자 |
 
-초안 생성·편집·갱신·승인은 현재 또는 직전 인계 회차에 적용한다. 해당 범위를 지난 미승인 보고서는 읽기 전용이며 변경 요청에는 409 `HANDOFF_SHIFT_EXPIRED`를 반환한다.
+편집의 `body`는 인계 `summary`, `gap_responses: [{gap_id, answer}]`, `item_notes: [{ticket_id, summary, followup, warnings}]`로 구성한다. `body`를 보내면 본문 전체를 대체한다. `status`는 기본 `DRAFT`다. `READY`에는 요약과 모든 누락 항목의 답변 또는 미확인 사유가 필요하다. 조건을 충족하지 못하면 422 `REPORT_INCOMPLETE`를 반환한다. `selection`을 보내거나 `refresh_snapshot=true`면 현재 자료로 다시 수집한다. 변경된 원본의 확인 답변은 재검토 대상으로 돌아간다.
 
-보고서 실행 결과는 해당 초안 버전이 그대로일 때만 적용한다. 사용자가 수정 또는 승인한 경우 생성 결과를 실행 상세에서 조회할 수 있다. 승인에 필요한 내용은 인계 요약과 스냅샷의 누락 ID 각각에 대한 확인 사유다. AI 실행과 승인 가능 여부는 독립적이다. 상세 결과 형식은 [에이전트 설계](AGENT.md)를 따른다.
+수동 포함·제외 목록은 각각 UUID 100개까지 입력한다. 같은 ID를 두 번 지정하면 422, 존재하지 않는 티켓 또는 회차는 404를 반환한다. 새 보고서가 이미 있으면 409 `HANDOVER_EXISTS`와 `details.handover_id`를 반환한다. 최종 확정에서 대상이나 원본 기록이 달라졌으면 409 `HANDOVER_STALE`을 반환한다. 자료를 갱신하고 준비 상태로 저장한 뒤 다시 확정한다.
+
+분석 결과는 수집 리비전에 연결한다. AI 호출이 실패한 경우에도 수집된 원본으로 본문을 편집·확정할 수 있다. [도구와 결과 형식](AGENT.md#4단계-인수인계-연동)

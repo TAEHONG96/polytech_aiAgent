@@ -14,6 +14,9 @@ from app.agent.provider import AnalysisFailure, generator
 from app.agent.schemas import QUEUE_SECONDS, RUN_SECONDS, RunStatus
 from app.agent.tools import Toolbox, require_active_user
 from app.db import engine
+from app.handover.analysis import draft_handover
+from app.handover.models import Handover, ShiftInstance, ShiftMembership
+from app.handover.service import snapshot_items
 
 logger = logging.getLogger(__name__)
 ACTIVE_RUNS = (RunStatus.QUEUED, RunStatus.RUNNING)
@@ -31,6 +34,8 @@ class Work:
     message: str
     token: UUID
     deadline: datetime
+    handover_id: UUID | None
+    handover_version: int | None
 
 
 class RunLost(Exception):
@@ -69,7 +74,8 @@ def claim_run() -> Work | None:
         run.started_at = now
         run.lease_token = uuid4()
         run.lease_expires_at = deadline + timedelta(seconds=20)
-        return Work(run.id, run.requested_by, run.ticket_id, run.message, run.lease_token, deadline)
+        return Work(run.id, run.requested_by, run.ticket_id, run.message, run.lease_token, deadline,
+                    run.handover_id, run.handover_version)
 
 
 def owned_run(db: Session, work: Work) -> AgentRun:
@@ -93,6 +99,16 @@ async def execute(work: Work, model, usage: Usage) -> dict:
         seconds = (work.deadline - utcnow()).total_seconds()
         if seconds <= 0:
             raise AnalysisFailure("AI_TIMEOUT", "분석 실행 시간이 초과되었습니다.", retryable=True)
+        if work.handover_id is not None:
+            with Session(engine()) as db:
+                report = db.get(Handover, work.handover_id)
+                shift = db.get(ShiftInstance, report.outgoing_shift_id)
+                if not db.get(ShiftMembership, (shift.team_id, work.requested_by)):
+                    raise PermissionError("Outgoing shift membership required")
+                shift_id = shift.id
+                items = snapshot_items(db, report.id, work.handover_version)
+            return await draft_handover(shift_id=shift_id, items=items, user_id=work.requested_by, model=model,
+                                        usage=usage, seconds=seconds, trace=lambda event: record_trace(work, event))
         return await investigate(
             request={"message": work.message, "ticket_id": str(work.ticket_id) if work.ticket_id else None},
             toolbox=Toolbox(work.requested_by, work.ticket_id), model=model, usage=usage, seconds=seconds,

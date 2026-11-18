@@ -23,7 +23,8 @@ from sqlalchemy import or_, select, tuple_
 from sqlalchemy.orm import Session
 
 from app.auth import CurrentUser, WriteUser
-from app.db import Database
+from app.db import Database, lock_ticket_snapshot
+from app.handover.models import TicketWork
 from app.http import ApiError
 from app.knowledge.indexing import sync_ticket_index
 from app.models import Ticket, TicketEvent
@@ -173,6 +174,7 @@ def view(ticket: Ticket) -> TicketView:
 def ticket_by_id(db: Session, ticket_id: UUID, *, lock: bool = False) -> Ticket:
     statement = select(Ticket).where(Ticket.id == ticket_id)
     if lock:
+        lock_ticket_snapshot(db)
         statement = statement.with_for_update()
     ticket = db.scalar(statement)
     if ticket is None:
@@ -228,6 +230,7 @@ def apply_changes(
 
 @router.post("", status_code=201)
 def create_ticket(body: TicketCreate, response: Response, db: Database, user: WriteUser) -> TicketView:
+    lock_ticket_snapshot(db)
     now = datetime.now(timezone.utc)
     ticket = Ticket(
         **body.model_dump(),
@@ -311,6 +314,10 @@ def change_status(ticket_id: UUID, body: Transition, db: Database, user: WriteUs
     ensure_editable(ticket, body.expected_version)
     if body.to_status not in TRANSITIONS[TicketStatus(ticket.status)]:
         raise ApiError(409, "INVALID_TRANSITION", "현재 상태에서 선택한 상태로 전환할 수 없습니다.")
+    if body.to_status == TicketStatus.CLOSED and db.scalar(
+        select(TicketWork.id).where(TicketWork.ticket_id == ticket.id, TicketWork.status != "done").limit(1)
+    ):
+        raise ApiError(409, "TICKET_WORK_PENDING", "미완료 작업을 정리한 뒤 티켓을 종료하세요.")
     fields = {"status": body.to_status}
     if body.to_status == TicketStatus.RESOLVED:
         fields.update(resolution=body.resolution, resolved_at=datetime.now(timezone.utc))

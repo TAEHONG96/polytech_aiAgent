@@ -1,7 +1,7 @@
 from datetime import datetime
 from uuid import UUID, uuid4
 
-from sqlalchemy import CheckConstraint, DateTime, ForeignKey, Index, String, Text, UniqueConstraint, text
+from sqlalchemy import CheckConstraint, DateTime, ForeignKey, ForeignKeyConstraint, Index, String, Text, UniqueConstraint, text
 from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.orm import Mapped, mapped_column
 
@@ -13,6 +13,13 @@ class AgentRun(Base):
     __table_args__ = (
         CheckConstraint("status IN ('queued', 'running', 'succeeded', 'failed')", name="ck_agent_runs_status"),
         Index("ix_agent_runs_queue", "status", "created_at"),
+        ForeignKeyConstraint(
+            ["handover_id", "handover_version"], ["handover_revisions.handover_id", "handover_revisions.version"],
+            name="fk_agent_run_handover_revision", match="FULL",
+        ),
+        Index("ix_agent_runs_handover", "handover_id", "handover_version", "created_at"),
+        Index("uq_agent_runs_active_handover", "handover_id", unique=True,
+              postgresql_where=text("handover_id IS NOT NULL AND status IN ('queued', 'running')")),
         Index(
             "uq_agent_runs_active_user", "requested_by", unique=True,
             postgresql_where=text("status IN ('queued', 'running')"),
@@ -22,6 +29,8 @@ class AgentRun(Base):
     id: Mapped[UUID] = mapped_column(primary_key=True, default=uuid4)
     requested_by: Mapped[UUID] = mapped_column(ForeignKey("users.id"))
     ticket_id: Mapped[UUID | None] = mapped_column(ForeignKey("tickets.id"))
+    handover_id: Mapped[UUID | None]
+    handover_version: Mapped[int | None]
     message: Mapped[str] = mapped_column(Text)
     status: Mapped[str] = mapped_column(String(14))
     provider: Mapped[str | None] = mapped_column(String(16))

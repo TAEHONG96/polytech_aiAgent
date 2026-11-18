@@ -59,6 +59,12 @@ dd { margin: 0; white-space: pre-wrap; overflow-wrap: anywhere; }
 .agent-evidence { border-top: 1px solid #dbe3ec; padding: .8rem 0; }
 .agent-evidence h3 { margin: 0; font-size: 1rem; }
 .agent-trace { white-space: pre-wrap; overflow-wrap: anywhere; }
+.handover-actions { margin-top: .9rem; }
+.handover-actions.row { align-items: end; }
+.checkbox-line { margin-block: .5rem; justify-content: flex-start; }
+.checkbox-line input { width: auto; }
+.work-line { margin-block: .5rem; }
+.agent-evidence :target, .agent-evidence:target { outline: 2px solid #4276b3; outline-offset: .2rem; }
 
 @media (max-width: 680px) {
   .filters { grid-template-columns: repeat(2, minmax(0, 1fr)); }

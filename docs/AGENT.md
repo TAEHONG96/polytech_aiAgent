@@ -1,6 +1,6 @@
 # Gemini 장애 분석 에이전트
 
-3단계 구현 기준 · 2026-11-18 (KST)
+3~4단계 구현 기준 · 2026-11-18 (KST)
 
 ## 실행 구조
 
@@ -54,4 +54,23 @@
 
 ## 4단계 인수인계 연동
 
-서버에서 근무조·미해결 티켓·작업 데이터를 인수인계 스냅샷으로 수집한 뒤, 기존 리스와 도구 기록 패턴을 인수인계 유형에 재사용한다. 이번 단계의 출처 검증과 검색 함수는 초안에 근거를 붙이는 데 사용할 수 있다. 편집·승인과 승인된 버전 보존은 별도 업무 흐름으로 둔다.
+인수인계 분석은 장애 분석과 같은 DB 큐, Gemini 어댑터, 시간·호출 예산, 검색 구현을 사용한다. 분석을 요청한 시점에 지정한 수집 리비전에서 티켓과 작업을 읽는다. 모형에 넘기는 텍스트는 길이를 제한하고 비밀값을 마스킹한다. 자동 함수 실행은 비활성화한다.
+
+| 조회 도구 | 읽는 자료 |
+| --- | --- |
+| `get_shift_tickets(shift_id)` | 해당 보고서에 선택된 티켓 목록 |
+| `get_ticket_details(ticket_id)` | 고정 티켓의 상태·우선순위·증상·영향·완료 기록 |
+| `get_ticket_history(ticket_id)` | 고정 이력의 최근 변경과 완료 기록 |
+| `get_pending_actions(ticket_id)` | 고정 작업, 다음 조치, 재확인 시각, 주의사항 |
+| `identify_handover_gaps(ticket_id)` | 서버 규칙에 따른 확인 질문 |
+| `search_sop(query, limit)`, `search_similar_tickets(query, limit)` | 교대 리뷰에 참고할 SOP와 유사 해결 이력 |
+
+도구 호출을 마치면 Gemini가 별도 구조화 JSON에서 `highlights`, `completed_work`, `followups`, `warnings`, `needs_review`, `references`, `possible_related_groups`별 근거 키를 선택한다. 서버는 키와 자료 유형을 검증하고 저장된 문구와 원본 링크를 붙인다. 완료 작업은 티켓 해결 요약 또는 완료 작업 기록을 인용한다. 유사 티켓 묶음은 연관 가능성의 확인 항목으로 표시한다. 운영자의 편집 본문과 답변은 별도로 저장한다.
+
+실행 한도는 장애 분석과 같다. 최대 24개 티켓, 티켓별 최대 18개 근거와 최근 5개 변경 이력을 모델에 제공한다. 범위를 줄이면 화면에 표시하며 스냅샷에 전체 기록이 남는다. 빈 스냅샷의 모델 요청은 0회다. 가상 실행 예시는 `get_shift_tickets → get_ticket_details → get_ticket_history → get_pending_actions → identify_handover_gaps → JSON 초안`이다.
+
+실제 호출은 기존 worker 환경의 키를 사용한다. 테스트는 코드에 내장된 합성 티켓 한 건만 보내며 모델명, 도구 순서, 호출 수와 응답 토큰을 출력한다. [실제 호출과 검증 기록](PROGRESS.md)
+
+```sh
+docker compose -p polytech-handover-smoke run --build --rm --no-deps worker python -m app.handover.smoke
+```
