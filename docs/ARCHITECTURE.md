@@ -4,7 +4,7 @@
 
 ## 현재 기반과 제안 구조
 
-현재 루트의 `main.py`, `Dockerfile`, `compose.yaml`과 `tests/test_health.py`는 FastAPI 상태 확인만 제공한다. 구현 시 `GET /health`의 200 응답과 `{"status":"ok"}` 계약을 유지한다. API·작업 프로세스는 한 FastAPI 코드베이스와 Python 이미지를 사용한다. React 앱은 Vite로 빌드한다.
+현재 1단계 기본 티켓 API와 2단계 SOP·해결 티켓 지식 검색을 제공한다. `GET /health`는 200과 `{"status":"ok"}`를 반환한다. API와 색인 worker는 같은 Python 이미지를 사용한다. React 앱은 Vite로 빌드한다.
 
 ```mermaid
 flowchart LR
@@ -12,7 +12,10 @@ flowchart LR
     Edge --> UI["React 정적 파일 / 개발 Vite"]
     Edge --> API["FastAPI · REST API"]
     API --> DB[("PostgreSQL + pgvector")]
-    DB <-->|"작업 및 결과"| Worker["Python 작업 프로세스"]
+    DB <-->|"색인 작업 및 벡터"| Worker
+    API -->|"질의 임베딩 · 내부 HTTP"| Worker
+    API --> Files[("SOP 파일 볼륨")]
+    Worker --> Files["Python 작업 프로세스"]
     Worker --> Gemini["Gemini API · HTTPS"]
     Migrator["Alembic 일회 실행"] --> DB
 ```
@@ -22,7 +25,7 @@ flowchart LR
 | `auth`, `shifts` | 로그인 세션, 역할·소속 검사, 담당 근무조와 회차 조회 |
 | `tickets` | 티켓·상태·작업·이력과 트랜잭션 |
 | `handoffs` | 스냅샷, 누락 규칙, 보고서 편집·승인. 이 모듈이 분석 결과 반영과 승인 검증을 담당한다. |
-| `knowledge` | SOP 버전 반입, 검색 소스 생성, pgvector 질의·근거 역참조 |
+| `knowledge` | SOP 업로드와 추출, 해결 티켓 색인, pgvector 순위 계산 및 출처 조회 |
 | `agent` | Gemini 어댑터, 함수 호출 허용 목록, 스키마 검증 및 실행 추적. 조회 도구는 업무 모듈에서 제공하는 읽기 함수만 호출한다. |
 | `worker` | DB에서 AI와 인덱싱 작업을 확보하고 서비스 메서드를 호출한다. 리스·재시도·종료 상태를 관리한다. |
 | React `features` | `tickets`, `analysis`, `knowledge`, `handoffs` 화면과 공통 API 클라이언트. 같은 출처에서 API를 호출한다. |
@@ -47,7 +50,8 @@ flowchart LR
 | `/tickets` | 기본 진입 화면. 검색·상태·우선순위·담당 회차·보관 필터, 목록, 새 티켓, 페이지 이동 |
 | `/tickets/new`, `/tickets/:id/edit` | 제목·증상·서비스·우선순위·발생 시각·영향·담당자·담당 회차·다음 조치 입력. 저장 충돌시 서버 버전 확인 |
 | `/tickets/:id` | 현재 상태와 배정, 상태 전환·보관, 작업 목록·이력·메모, AI 분석 탭과 실행 내역 |
-| `/knowledge`, `/knowledge/:id` | 발행 SOP 목록, 절 단위 링크, 이전 인용의 버전 조회 |
+| `/knowledge`, `/knowledge/:id` | SOP 업로드와 목록, 처리 상태, 추출 텍스트·원본 다운로드·삭제·재처리 |
+| `/knowledge/search` | 자연어 질의, SOP·해결 티켓 필터, 관련 청크와 원본 출처 |
 | `/handoffs` | 현재·직전 회차, 미해결·미배정·이월 집계, 미완료 작업·누락 정보, 초안 생성과 과거 보고서 목록 |
 | `/handoffs/:id` | 입력 스냅샷, 근거, 인계조·인수조, 편집·갱신·승인, 승인된 고정 내용, 생성 실패 시 수동 편집 |
 | `/ai-runs/:id` | 실행 상태, 소요 시간, 검증된 결과 및 근거, 마스킹된 도구 이력, 실패·재실행 안내 |
@@ -61,7 +65,7 @@ flowchart LR
 | `db` | `pgvector/pgvector:0.8.7-pg17-bookworm` 후보, `db_data` named volume을 `/var/lib/postgresql/data`에 연결, `pg_isready`, 내부 DB 네트워크만 연결 | 별도 Compose 프로젝트와 볼륨. 포트 발행 없이 `docker compose exec db psql`로 접근 |
 | `migrate` | DB healthy 이후 별도 소유자 자격으로 `alembic upgrade head` 실행 후 종료 | 동일, 시험 전 별도 테스트 DB 사용 |
 | `api` | migration 성공 이후 시작. Nginx와 DB의 내부 네트워크에 연결. 8000은 컨테이너 내부 포트 | 소스 마운트와 Uvicorn reload |
-| `worker` | migration 성공 이후 시작. DB 내부 네트워크와 HTTPS 송신용 브리지에 연결. `GEMINI_API_KEY`의 유일한 소비자 | 기본 `fake` provider, 명시적 개발 스모크에서 `gemini` 선택 |
+| `worker` | migration 성공 이후 기동. DB 내부망과 임베딩용 송신 브리지에 연결. 내부 8001번에서 질의 임베딩을 제공한다. API와 `sop_files` 볼륨을 공유하며 `GEMINI_API_KEY`를 담당한다. | 기본 `fake`, 선택 설정 `gemini` |
 | `nginx` | 다단계 Node 빌드 결과 서빙, `/api/`와 `/health`를 API로 프록시. HTTPS 443, HTTP 80은 TLS 리다이렉트 또는 인증서 발급용 | 개발 브라우저에는 Nginx의 `127.0.0.1:8080`만 발행. 화면과 HMR은 컨테이너의 Vite에 프록시 |
 | `frontend` | 정적 파일은 Nginx 이미지에 포함 | Vite 개발 서버, 컨테이너 내부 포트 5173 |
 
@@ -70,6 +74,8 @@ flowchart LR
 - Ubuntu에서 Docker Engine과 Compose 플러그인을 사용한다. 운영 환경의 인증서·갱신은 호스트에서 관리하고 Nginx에는 읽기 전용으로 설치한다. 호스트에서 Nginx 포트의 접근 범위를 검증한다. [Docker Engine Ubuntu 설치](https://docs.docker.com/engine/install/ubuntu/) · [Compose 플러그인](https://docs.docker.com/compose/install/linux/)
 - 개발·운영의 프로젝트 이름, 데이터 볼륨, DB 비밀번호와 모델 설정을 분리한다. 저장소 밖의 권한 제한 환경 파일에서 worker에만 Gemini 키를 주입한다. 브라우저, `VITE_*`, 이미지 빌드 인자, 로그에는 키를 포함하지 않는다. 설정 확인 시 시크릿이 표시되는 전체 Compose 출력을 남기지 않는다. [Compose 서비스와 env_file](https://docs.docker.com/reference/compose-file/services/#env_file)
 - 배포는 백업, 이미지 빌드·검증, 일회성 migration, API·worker·Nginx 재기동, smoke 순으로 확인한다. 호환되는 스키마만 이전 이미지로 되돌릴 수 있다. 호환이 깨진 경우 격리된 볼륨에서 백업을 복원하고 검증한 후 전환한다. DB는 `pg_dump`를 매일 생성해 호스트 밖에 보관하고 복원 시간을 측정한다. 단일 호스트 장애 동안 서비스 중단을 감수한다. [Docker 볼륨](https://docs.docker.com/engine/storage/volumes/) · [PostgreSQL pg_dump](https://www.postgresql.org/docs/17/app-pgdump.html)
+
+업로드는 `POST /api/v1/sops`에서 전체 multipart 요청을 최대 8 MiB로 제한한다. Nginx와 FastAPI가 동일한 한도를 적용한다. 원본 파일은 UUID로 이름을 정해 `sop_files`에 저장한다. 백업에는 해당 볼륨과 DB의 메타데이터를 함께 포함한다. 브라우저 포트와 기존 API 경로는 유지한다.
 
 ## 운영 상태와 경계
 

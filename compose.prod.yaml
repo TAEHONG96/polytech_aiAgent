@@ -17,6 +17,11 @@ services:
       APP_DB_PASSWORD: ${APP_DB_PASSWORD:?Set APP_DB_PASSWORD}
       APP_ORIGIN: ${APP_ORIGIN:?Set the HTTPS APP_ORIGIN}
       APP_CSRF_SECRET: ${APP_CSRF_SECRET:?Set APP_CSRF_SECRET}
+      AGENT_PROVIDER: ${AGENT_PROVIDER:-gemini}
+  worker:
+    environment:
+      APP_DB_PASSWORD: ${APP_DB_PASSWORD:?Set APP_DB_PASSWORD}
+      AGENT_PROVIDER: ${AGENT_PROVIDER:-gemini}
   nginx:
     build:
       target: production

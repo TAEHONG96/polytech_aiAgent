@@ -3,6 +3,8 @@ import type { FormEvent } from 'react'
 import { createRoot } from 'react-dom/client'
 import { api, ApiError, errorMessage, statuses } from './api'
 import type { Session, Severity, Status, Ticket, TicketPage } from './api'
+import { KnowledgeSearch, SopDetail, SopList } from './knowledge'
+import { ErrorNotice } from './ui'
 import './style.css'
 
 const priorities: Severity[] = ['P1', 'P2', 'P3', 'P4']
@@ -16,10 +18,6 @@ const inputDate = new Intl.DateTimeFormat('sv-SE', {
 
 function dateInput(value: string) {
   return inputDate.format(new Date(value)).replace(' ', 'T')
-}
-
-function ErrorNotice({ message }: { message: string }) {
-  return message && <p className="notice" role="alert">{message}</p>
 }
 
 function Login({ onLogin }: { onLogin: (session: Session) => void }) {
@@ -256,6 +254,8 @@ function App() {
   const path = window.location.pathname
   const detail = /^\/tickets\/([^/]+)(\/edit)?$/.exec(path)
 
+  const sopDetail = /^\/knowledge\/([^/]+)$/.exec(path)
+
   useEffect(() => {
     api<Session>('/auth/session').then(setSession).catch(failure => {
       if (!(failure instanceof ApiError && failure.status === 401)) setError(errorMessage(failure))
@@ -277,13 +277,19 @@ function App() {
   return (
     <>
       <header><nav className="shell row">
-        <a className="brand" href="/tickets">IT 운영 지원</a>
+        <div className="row">
+          <a className="brand" href="/tickets">IT 운영 지원</a>
+          {session && <><a href="/tickets">장애 티켓</a><a href="/knowledge">SOP 문서</a><a href="/knowledge/search">지식 검색</a></>}
+        </div>
         {session && <div className="row account"><span>{session.user.display_name}</span><button className="secondary" onClick={logout}>로그아웃</button></div>}
       </nav></header>
       <main className="shell">
         <ErrorNotice message={error} />
         {session === undefined ? <p role="status">세션을 확인하는 중입니다.</p>
           : !session ? <Login onLogin={setSession} />
+          : path === '/knowledge/search' ? <KnowledgeSearch session={session} />
+          : path === '/knowledge' ? <SopList session={session} />
+          : sopDetail ? <SopDetail id={sopDetail[1]} session={session} />
           : path === '/tickets/new' ? <TicketForm session={session} />
           : detail ? <TicketDetail id={detail[1]} edit={Boolean(detail[2])} session={session} />
           : <TicketList />}

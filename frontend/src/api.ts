@@ -45,7 +45,7 @@ export class ApiError extends Error {
 
 export async function api<T>(path: string, options?: RequestInit, token?: string): Promise<T> {
   const headers = new Headers(options?.headers)
-  if (options?.body) headers.set('Content-Type', 'application/json')
+  if (options?.body && !(options.body instanceof FormData)) headers.set('Content-Type', 'application/json')
   if (token) headers.set('X-CSRF-Token', token)
   const response = await fetch('/api/v1' + path, { ...options, headers })
   if (!response.ok) {

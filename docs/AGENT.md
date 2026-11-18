@@ -10,8 +10,14 @@
 | --- | --- |
 | Provider | `AGENT_PROVIDER=fake\|gemini`. Fake는 고정된 도구 호출, 재현 가능한 검색용 임베딩과 결과·실패 응답을 만든다. 실제와 동일한 작업·도구·검증 경로를 통과한다. |
 | 생성 모델 | `GEMINI_GENERATION_MODEL=gemini-3.8-flash` 후보. worker의 Google Gen AI Python SDK를 통한 `generate_content`를 사용한다. 대상 계정에서 가용성, 함수 호출 왕복, 구조화 출력 및 응답 시간을 확인한 뒤 확정한다. [Gemini 3.8 Flash 모델](https://aistudio.google.com/docs/models/gemini-3.8-flash) · [모델 사용 종료 일정](https://aistudio.google.com/docs/deprecations) · [Python SDK](https://github.com/googleapis/python-genai) |
-| 임베딩 모델 | `GEMINI_EMBEDDING_MODEL=gemini-embedding-2`, 출력 768차원 후보. 문서와 질의 텍스트에 공식 검색용 접두 체계를 적용한다. 모델명·차원·입력 형식·분할 버전·provider를 프로필에 포함한다. [Gemini 임베딩](https://aistudio.google.com/docs/embeddings) |
+| 임베딩 모델 | `GEMINI_EMBEDDING_MODEL=gemini-embedding-2`, 출력 768차원. 2단계에서 문서와 질의에 공식 검색용 접두 체계를 적용한다. 모델명·차원·입력 형식·분할 버전·provider를 프로필에 포함한다. [Gemini 임베딩](https://aistudio.google.com/docs/embeddings) |
 | 키와 전송 내용 | `GEMINI_API_KEY`는 worker 환경변수에서 읽는다. 모델에 보내는 데이터는 사용 권한이 있는 합성 티켓과 SOP의 필요한 필드로 제한한다. 실제 데이터 반입 전에는 전송 항목·서비스/계정 조건·조직 정책을 검토한다. [Gemini API 이용 조건](https://aistudio.google.com/docs/terms) |
+
+## 2단계 검색 인터페이스
+
+3단계는 `app.knowledge.search.search_index(db, vector=…, profile=…, source_types=…, limit=…)`를 재사용한다. 작업 프로세스에서 `get_embedder().query(query)`로 질의 벡터를 구한 뒤 같은 공급자의 `profile.fingerprint`로 검색한다. HTTP에서 호출하는 경우 `POST /api/v1/knowledge/search`를 사용한다. 결과는 출처 유형·UUID, 제목·청크 본문, 점수, PDF 쪽 또는 Markdown 제목, 티켓 버전과 원본 링크를 제공한다.
+
+2단계의 SOP는 업로드 UUID가 개별 원본을 식별한다. 같은 본문의 업로드는 SHA-256으로 감지한다. 향후 분석 보고서가 인용하는 발췌 보존과 도구 호출 기록은 아래 설계에 따른다.
 
 ## 도구 허용 목록
 
@@ -21,7 +27,7 @@
 | --- | --- | --- | --- |
 | `get_ticket_context` | 장애 분석 | 없음 | 입력 티켓의 생성 시점 스냅샷, 제한된 관련 작업과 이력, 규칙 기반 누락 ID |
 | `search_similar_incidents` | 장애 분석 | `query` 최대 300자, `limit` 1–5 | 대상 티켓을 제외한 유사 해결 사례의 제한된 발췌, ID·리비전·거리 기반 점수 |
-| `search_sop` | 장애 분석 | `query` 최대 300자, `limit` 1–5 | 현재 발행 SOP 절, 버전 ID, 제한된 발췌, 점수 |
+| `search_sop` | 장애 분석 | `query` 최대 300자, `limit` 1–5 | 색인된 SOP의 원본 UUID·쪽/제목, 제한된 발췌, 점수 |
 | `get_handoff_snapshot` | 인수인계 | 없음 | 지정 보고서 리비전의 인계·인수 회차, 미해결·미완료·이월·해당 회차의 해결 요약, 서버 누락 항목 및 근거 키 |
 
 ## 실행 순서
@@ -36,8 +42,8 @@
 
 ## 검색과 근거
 
-- 과거 티켓은 해결 요약이 있는 비보관 `resolved`·`closed`를 사용한다. 제목·서비스·증상·영향·해결을 정해진 순서로 변환한다. SOP는 발행 문서의 제목과 절을 단위로 사용한다. 색인 초깃값은 청크당 약 400 토큰과 60 토큰 중첩이며 절의 식별자를 보존한다.
-- 소스는 변경 트랜잭션에서 색인 작업과 함께 등록한다. worker가 차원·유한값·영벡터 여부를 확인하고 전체 청크를 원자적으로 공개한다. 티켓이 재개·보관되거나 SOP의 새 버전이 발행되면 구버전을 즉시 검색에서 제외한다. 색인 작업을 실행할 때 현재 리비전을 확인하고 이미 대체된 작업의 게시를 막는다.
+- 과거 티켓은 해결 요약이 있는 비보관 `resolved`·`closed`를 사용한다. 제목·서비스·증상·영향·해결을 정해진 순서로 변환한다. SOP는 제목과 PDF 쪽 또는 Markdown 제목을 보존한다. 2단계 색인은 청크당 최대 1,200자, 180자 중첩을 사용한다.
+- 소스는 변경 트랜잭션에서 색인 작업과 함께 등록한다. worker가 차원·유한값·영벡터 여부를 확인하고 전체 청크를 원자적으로 공개한다. 티켓이 재개·보관되거나 SOP가 삭제되면 기존 청크를 즉시 검색에서 제외한다. 색인 작업을 실행할 때 현재 리비전을 확인하고 이미 대체된 작업의 게시를 막는다.
 - 두 소스를 각각 필터한 뒤 코사인 거리로 정렬한다. 점수는 `1 - 거리`로 표시하고 정확한 동률은 청크 ID로 정렬한다. 소스마다 중복을 줄여 최대 5건씩 전달한다. 점수 하한은 시연용 사례·무관 질의로 보정하고 합격 기준을 기록한다. 점수는 가설의 사실 여부를 나타내는 확률로 사용하지 않는다.
 - 근거 응답에는 서버 생성 키, 소스 유형, 제목, 발췌, 버전과 티켓 번호 또는 SOP 절 링크가 들어간다. 답변 항목별 근거 목록이 비면 `basis_status=insufficient`와 이유·확인 방법을 요구한다. 결과가 없는 검색, 색인 대기, 임베딩 요청 실패는 별도 결과 코드로 기록한다.
 - 인수인계의 스냅샷 티켓·작업 목록과 누락 결과는 서버가 렌더링한다. 모델의 요약이나 편집 본문이 이 원본 목록을 대체하지 않는다. 모델에 넘기는 티켓·작업 요약 및 발췌를 크기 한도로 제한하고 생략 건수를 경고로 표시한다. 전체 스냅샷은 UI에서 확인할 수 있다. 과거 이력·문서가 변경되어도 저장한 근거 발췌와 출처 버전을 보여준다.
