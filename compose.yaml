@@ -45,7 +45,12 @@ services:
 
   api:
     <<: *backend
-    environment: *app-env
+    environment:
+      <<: *app-env
+      AGENT_PROVIDER: ${AGENT_PROVIDER:-fake}
+      GEMINI_EMBEDDING_MODEL: ${GEMINI_EMBEDDING_MODEL:-gemini-embedding-2}
+    volumes:
+      - sop_files:/var/lib/polytech/sops
     networks: [data, web]
     depends_on:
       db:
@@ -61,6 +66,28 @@ services:
       interval: 3s
       timeout: 5s
       retries: 20
+    restart: unless-stopped
+
+  worker:
+    <<: *backend
+    environment:
+      <<: *app-env
+      AGENT_PROVIDER: ${AGENT_PROVIDER:-fake}
+      GEMINI_EMBEDDING_MODEL: ${GEMINI_EMBEDDING_MODEL:-gemini-embedding-2}
+      GEMINI_API_KEY: ${GEMINI_API_KEY:-}
+    command: ["python", "-m", "uvicorn", "app.knowledge.worker:app", "--host", "0.0.0.0", "--port", "8001"]
+    volumes:
+      - sop_files:/var/lib/polytech/sops
+    networks: [data, embedding_egress]
+    depends_on:
+      migrate:
+        condition: service_completed_successfully
+    healthcheck:
+      test: ["CMD", "python", "-c", "from urllib.request import urlopen; urlopen('http://127.0.0.1:8001/health', timeout=3).close()"]
+      interval: 3s
+      timeout: 5s
+      retries: 20
+    mem_limit: 512m
     restart: unless-stopped
 
   nginx:
@@ -83,6 +110,7 @@ services:
       APP_AUTH_USERNAME: ${APP_AUTH_USERNAME:-demo}
       APP_BOOTSTRAP_PASSWORD: ${APP_BOOTSTRAP_PASSWORD:-local-demo-password}
       RUN_POSTGRES_TESTS: "1"
+      AGENT_PROVIDER: fake
     networks: [data]
     depends_on:
       migrate:
@@ -90,9 +118,11 @@ services:
 
 volumes:
   db_data:
+  sop_files:
 
 networks:
   ingress:
+  embedding_egress:
   web:
     internal: true
   data:

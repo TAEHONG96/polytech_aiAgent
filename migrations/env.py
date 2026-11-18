@@ -1,7 +1,7 @@
 from alembic import context
 
 from app.db import engine
-from app.models import Base
+from app.knowledge.models import Base
 from app.settings import settings
 
 

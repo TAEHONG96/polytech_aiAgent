@@ -25,6 +25,7 @@ from sqlalchemy.orm import Session
 from app.auth import CurrentUser, WriteUser
 from app.db import Database
 from app.http import ApiError
+from app.knowledge.indexing import sync_ticket_index
 from app.models import Ticket, TicketEvent
 
 router = APIRouter(prefix="/tickets", tags=["tickets"])
@@ -221,6 +222,7 @@ def apply_changes(
     if reason is not None:
         details["reason"] = reason
     record_event(db, ticket, actor_id, event_type, details)
+    sync_ticket_index(db, ticket)
     db.commit()
 
 

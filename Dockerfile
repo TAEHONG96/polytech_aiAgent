@@ -8,6 +8,7 @@ RUN python -m pip install --no-cache-dir -r requirements.txt && python -m pip ch
 COPY main.py alembic.ini ./
 COPY app ./app
 COPY migrations ./migrations
+RUN install -d -m 0750 -o 10001 -g 10001 /var/lib/polytech/sops
 
 USER 10001:10001
 EXPOSE 8000
