@@ -11,6 +11,8 @@ htmlcov/
 # Frontend artifacts
 node_modules/
 dist/
+playwright-report/
+test-results/
 
 # Local environment
 .env

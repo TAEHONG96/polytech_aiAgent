@@ -174,6 +174,9 @@ def test_validation_search_and_cursor(client, auth):
     assert next_page == {"items": [first], "next_cursor": None}
     cursor_mismatch = client.get(TICKETS, params={**query, "status": "open", "cursor": page["next_cursor"]})
     assert cursor_mismatch.status_code == 422
+    quoted_title = prefix + " QA '인용' 100%"
+    quoted = create(client, auth, quoted_title)
+    assert client.get(TICKETS, params={"q": quoted_title}).json()["items"] == [quoted]
     assert client.get(f"{TICKETS}/{uuid4()}").status_code == 404
 
 

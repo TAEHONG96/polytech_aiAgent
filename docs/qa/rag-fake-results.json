@@ -1,0 +1,1164 @@
+{
+  "provider": "fake",
+  "profile": "fake:lexical-v1:768:chunks-v1",
+  "dimensions": 768,
+  "min_score": null,
+  "positive_queries": 15,
+  "negative_queries": 11,
+  "recall_at_5": 0.9666666666666667,
+  "precision_at_5": 0.3866666666666667,
+  "mrr": 0.8722222222222222,
+  "negative_empty": 0,
+  "latency_ms": {
+    "p50": 4.675,
+    "p95": 7.3675,
+    "max": 7.75
+  },
+  "deletion": {
+    "source_id": "6f93540d-9db1-414b-8462-2641d5f96ed9",
+    "present_before": true,
+    "absent_during_delete": true,
+    "present_after_rollback": true
+  },
+  "document_requests": 14,
+  "query_requests": 26,
+  "queries": [
+    {
+      "label": "boot",
+      "query": "서버 부팅 실패와 메인보드 오류, POST 진단 테스트 실패",
+      "split": "calibration",
+      "expected_ids": [
+        "6f93540d-9db1-414b-8462-2641d5f96ed9",
+        "48bdae70-1792-5c1b-91d1-97facd4120b6"
+      ],
+      "actual": [
+        {
+          "id": "6f93540d-9db1-414b-8462-2641d5f96ed9",
+          "type": "SOP",
+          "title": "[가상 SOP] 서버 부팅 실패와 메인보드 오류",
+          "score": 0.721397
+        },
+        {
+          "id": "48bdae70-1792-5c1b-91d1-97facd4120b6",
+          "type": "TICKET",
+          "title": "[가상 티켓] 서버 부팅 실패와 메인보드 오류",
+          "score": 0.625311
+        },
+        {
+          "id": "fdd310b3-ec76-4184-8e98-03bcd34a03e5",
+          "type": "SOP",
+          "title": "[가상 SOP] 메모리 DIMM ECC 오류",
+          "score": 0.219556
+        },
+        {
+          "id": "a7dc8e4c-af6a-5693-9879-ed99b09b2460",
+          "type": "TICKET",
+          "title": "[가상 티켓] 메모리 DIMM ECC 오류",
+          "score": 0.196644
+        },
+        {
+          "id": "6a467bc5-6187-48dd-9a17-e15377369553",
+          "type": "SOP",
+          "title": "[가상 SOP] BMC 관리 인터페이스 접근 실패",
+          "score": 0.162221
+        }
+      ],
+      "embedding_ms": 0.13,
+      "elapsed_ms": 7.75,
+      "matched": 2,
+      "reciprocal_rank": 1.0
+    },
+    {
+      "label": "memory",
+      "query": "메모리 DIMM 슬롯에서 반복되는 ECC 교정 오류",
+      "split": "calibration",
+      "expected_ids": [
+        "fdd310b3-ec76-4184-8e98-03bcd34a03e5",
+        "a7dc8e4c-af6a-5693-9879-ed99b09b2460"
+      ],
+      "actual": [
+        {
+          "id": "fdd310b3-ec76-4184-8e98-03bcd34a03e5",
+          "type": "SOP",
+          "title": "[가상 SOP] 메모리 DIMM ECC 오류",
+          "score": 0.65372
+        },
+        {
+          "id": "a7dc8e4c-af6a-5693-9879-ed99b09b2460",
+          "type": "TICKET",
+          "title": "[가상 티켓] 메모리 DIMM ECC 오류",
+          "score": 0.621169
+        },
+        {
+          "id": "48bdae70-1792-5c1b-91d1-97facd4120b6",
+          "type": "TICKET",
+          "title": "[가상 티켓] 서버 부팅 실패와 메인보드 오류",
+          "score": 0.212844
+        },
+        {
+          "id": "6f93540d-9db1-414b-8462-2641d5f96ed9",
+          "type": "SOP",
+          "title": "[가상 SOP] 서버 부팅 실패와 메인보드 오류",
+          "score": 0.196932
+        },
+        {
+          "id": "5d12901e-5d39-5d71-83ad-6b7ae1097cbf",
+          "type": "TICKET",
+          "title": "[가상 티켓] CPU 사용률 급증과 프로세스 과부하",
+          "score": 0.172958
+        }
+      ],
+      "embedding_ms": 0.12,
+      "elapsed_ms": 3.75,
+      "matched": 2,
+      "reciprocal_rank": 1.0
+    },
+    {
+      "label": "disk",
+      "query": "RAID 배열 저하와 디스크 SMART 경고 발생",
+      "split": "calibration",
+      "expected_ids": [
+        "a0ef3bd5-bd8f-47cf-a755-17953c8d2ec7",
+        "a008ac0d-ecb4-5dc3-a386-da8e40018ada"
+      ],
+      "actual": [
+        {
+          "id": "a0ef3bd5-bd8f-47cf-a755-17953c8d2ec7",
+          "type": "SOP",
+          "title": "[가상 SOP] 디스크 SMART 장애와 RAID 성능 저하",
+          "score": 0.599824
+        },
+        {
+          "id": "a008ac0d-ecb4-5dc3-a386-da8e40018ada",
+          "type": "TICKET",
+          "title": "[가상 티켓] 디스크 SMART 장애와 RAID 성능 저하",
+          "score": 0.566137
+        },
+        {
+          "id": "f49da16c-59df-4c6f-9710-ab765eb2b028",
+          "type": "SOP",
+          "title": "[가상 SOP] 전원 공급 장치 PSU 이중화 경고",
+          "score": 0.189627
+        },
+        {
+          "id": "83428fd8-a2a5-56be-a9e6-6caefa8000e4",
+          "type": "TICKET",
+          "title": "[가상 티켓] 전원 공급 장치 PSU 이중화 경고",
+          "score": 0.164018
+        },
+        {
+          "id": "5d12901e-5d39-5d71-83ad-6b7ae1097cbf",
+          "type": "TICKET",
+          "title": "[가상 티켓] CPU 사용률 급증과 프로세스 과부하",
+          "score": 0.064657
+        }
+      ],
+      "embedding_ms": 0.11,
+      "elapsed_ms": 4.24,
+      "matched": 2,
+      "reciprocal_rank": 1.0
+    },
+    {
+      "label": "network",
+      "query": "네트워크 링크가 끊기고 CRC 오류와 패킷 손실 발생",
+      "split": "calibration",
+      "expected_ids": [
+        "7d0d471c-7fb2-403b-b762-fdbe969d58af",
+        "8ce85b7b-fc24-52b1-9470-d0c00bace839"
+      ],
+      "actual": [
+        {
+          "id": "8ce85b7b-fc24-52b1-9470-d0c00bace839",
+          "type": "TICKET",
+          "title": "[가상 티켓] 네트워크 링크 불량과 패킷 손실",
+          "score": 0.545592
+        },
+        {
+          "id": "7d0d471c-7fb2-403b-b762-fdbe969d58af",
+          "type": "SOP",
+          "title": "[가상 SOP] 네트워크 링크 불량과 패킷 손실",
+          "score": 0.537271
+        },
+        {
+          "id": "83428fd8-a2a5-56be-a9e6-6caefa8000e4",
+          "type": "TICKET",
+          "title": "[가상 티켓] 전원 공급 장치 PSU 이중화 경고",
+          "score": 0.107375
+        },
+        {
+          "id": "a0ef3bd5-bd8f-47cf-a755-17953c8d2ec7",
+          "type": "SOP",
+          "title": "[가상 SOP] 디스크 SMART 장애와 RAID 성능 저하",
+          "score": 0.103944
+        },
+        {
+          "id": "f49da16c-59df-4c6f-9710-ab765eb2b028",
+          "type": "SOP",
+          "title": "[가상 SOP] 전원 공급 장치 PSU 이중화 경고",
+          "score": 0.097231
+        }
+      ],
+      "embedding_ms": 0.22,
+      "elapsed_ms": 7.27,
+      "matched": 2,
+      "reciprocal_rank": 1.0
+    },
+    {
+      "label": "bmc",
+      "query": "BMC 관리 인터페이스 접근 실패와 관리 포트 비활성",
+      "split": "calibration",
+      "expected_ids": [
+        "6a467bc5-6187-48dd-9a17-e15377369553",
+        "10e29387-b575-5168-b817-07d21963ed9f"
+      ],
+      "actual": [
+        {
+          "id": "6a467bc5-6187-48dd-9a17-e15377369553",
+          "type": "SOP",
+          "title": "[가상 SOP] BMC 관리 인터페이스 접근 실패",
+          "score": 0.669187
+        },
+        {
+          "id": "10e29387-b575-5168-b817-07d21963ed9f",
+          "type": "TICKET",
+          "title": "[가상 티켓] BMC 관리 인터페이스 접근 실패",
+          "score": 0.639813
+        },
+        {
+          "id": "6f93540d-9db1-414b-8462-2641d5f96ed9",
+          "type": "SOP",
+          "title": "[가상 SOP] 서버 부팅 실패와 메인보드 오류",
+          "score": 0.094095
+        },
+        {
+          "id": "48bdae70-1792-5c1b-91d1-97facd4120b6",
+          "type": "TICKET",
+          "title": "[가상 티켓] 서버 부팅 실패와 메인보드 오류",
+          "score": 0.091065
+        },
+        {
+          "id": "8ce85b7b-fc24-52b1-9470-d0c00bace839",
+          "type": "TICKET",
+          "title": "[가상 티켓] 네트워크 링크 불량과 패킷 손실",
+          "score": 0.086272
+        }
+      ],
+      "embedding_ms": 0.2,
+      "elapsed_ms": 5.34,
+      "matched": 2,
+      "reciprocal_rank": 1.0
+    },
+    {
+      "label": "cpu",
+      "query": "CPU 사용률 급증과 배치 프로세스 처리 지연",
+      "split": "calibration",
+      "expected_ids": [
+        "6098088f-9a43-481a-9ef2-7b9469bc9de2",
+        "5d12901e-5d39-5d71-83ad-6b7ae1097cbf"
+      ],
+      "actual": [
+        {
+          "id": "6098088f-9a43-481a-9ef2-7b9469bc9de2",
+          "type": "SOP",
+          "title": "[가상 SOP] CPU 사용률 급증과 프로세스 과부하",
+          "score": 0.647183
+        },
+        {
+          "id": "5d12901e-5d39-5d71-83ad-6b7ae1097cbf",
+          "type": "TICKET",
+          "title": "[가상 티켓] CPU 사용률 급증과 프로세스 과부하",
+          "score": 0.587945
+        },
+        {
+          "id": "fdd310b3-ec76-4184-8e98-03bcd34a03e5",
+          "type": "SOP",
+          "title": "[가상 SOP] 메모리 DIMM ECC 오류",
+          "score": 0.077339
+        },
+        {
+          "id": "a7dc8e4c-af6a-5693-9879-ed99b09b2460",
+          "type": "TICKET",
+          "title": "[가상 티켓] 메모리 DIMM ECC 오류",
+          "score": 0.070386
+        },
+        {
+          "id": "7d0d471c-7fb2-403b-b762-fdbe969d58af",
+          "type": "SOP",
+          "title": "[가상 SOP] 네트워크 링크 불량과 패킷 손실",
+          "score": 0.060921
+        }
+      ],
+      "embedding_ms": 0.13,
+      "elapsed_ms": 4.23,
+      "matched": 2,
+      "reciprocal_rank": 1.0
+    },
+    {
+      "label": "power",
+      "query": "전원 공급 장치 PSU 비활성과 이중화 경고",
+      "split": "calibration",
+      "expected_ids": [
+        "f49da16c-59df-4c6f-9710-ab765eb2b028",
+        "83428fd8-a2a5-56be-a9e6-6caefa8000e4"
+      ],
+      "actual": [
+        {
+          "id": "f49da16c-59df-4c6f-9710-ab765eb2b028",
+          "type": "SOP",
+          "title": "[가상 SOP] 전원 공급 장치 PSU 이중화 경고",
+          "score": 0.773574
+        },
+        {
+          "id": "83428fd8-a2a5-56be-a9e6-6caefa8000e4",
+          "type": "TICKET",
+          "title": "[가상 티켓] 전원 공급 장치 PSU 이중화 경고",
+          "score": 0.724286
+        },
+        {
+          "id": "6a467bc5-6187-48dd-9a17-e15377369553",
+          "type": "SOP",
+          "title": "[가상 SOP] BMC 관리 인터페이스 접근 실패",
+          "score": 0.053934
+        },
+        {
+          "id": "a0ef3bd5-bd8f-47cf-a755-17953c8d2ec7",
+          "type": "SOP",
+          "title": "[가상 SOP] 디스크 SMART 장애와 RAID 성능 저하",
+          "score": 0.053709
+        },
+        {
+          "id": "a7dc8e4c-af6a-5693-9879-ed99b09b2460",
+          "type": "TICKET",
+          "title": "[가상 티켓] 메모리 DIMM ECC 오류",
+          "score": 0.046012
+        }
+      ],
+      "embedding_ms": 0.17,
+      "elapsed_ms": 7.4,
+      "matched": 2,
+      "reciprocal_rank": 1.0
+    },
+    {
+      "label": "boot-paraphrase",
+      "query": "전원을 켜면 초기 하드웨어 자체 검사에서 멈추고 운영체제가 시작되지 않는다",
+      "split": "holdout",
+      "expected_ids": [
+        "6f93540d-9db1-414b-8462-2641d5f96ed9",
+        "48bdae70-1792-5c1b-91d1-97facd4120b6"
+      ],
+      "actual": [
+        {
+          "id": "f49da16c-59df-4c6f-9710-ab765eb2b028",
+          "type": "SOP",
+          "title": "[가상 SOP] 전원 공급 장치 PSU 이중화 경고",
+          "score": 0.161788
+        },
+        {
+          "id": "fdd310b3-ec76-4184-8e98-03bcd34a03e5",
+          "type": "SOP",
+          "title": "[가상 SOP] 메모리 DIMM ECC 오류",
+          "score": 0.158114
+        },
+        {
+          "id": "6098088f-9a43-481a-9ef2-7b9469bc9de2",
+          "type": "SOP",
+          "title": "[가상 SOP] CPU 사용률 급증과 프로세스 과부하",
+          "score": 0.127578
+        },
+        {
+          "id": "6f93540d-9db1-414b-8462-2641d5f96ed9",
+          "type": "SOP",
+          "title": "[가상 SOP] 서버 부팅 실패와 메인보드 오류",
+          "score": 0.121988
+        },
+        {
+          "id": "7d0d471c-7fb2-403b-b762-fdbe969d58af",
+          "type": "SOP",
+          "title": "[가상 SOP] 네트워크 링크 불량과 패킷 손실",
+          "score": 0.121988
+        }
+      ],
+      "embedding_ms": 0.14,
+      "elapsed_ms": 4.12,
+      "matched": 1,
+      "reciprocal_rank": 0.25
+    },
+    {
+      "label": "memory-paraphrase",
+      "query": "특정 메모리 모듈에서 보정 가능한 오류가 반복된다",
+      "split": "holdout",
+      "expected_ids": [
+        "fdd310b3-ec76-4184-8e98-03bcd34a03e5",
+        "a7dc8e4c-af6a-5693-9879-ed99b09b2460"
+      ],
+      "actual": [
+        {
+          "id": "48bdae70-1792-5c1b-91d1-97facd4120b6",
+          "type": "TICKET",
+          "title": "[가상 티켓] 서버 부팅 실패와 메인보드 오류",
+          "score": 0.232029
+        },
+        {
+          "id": "6f93540d-9db1-414b-8462-2641d5f96ed9",
+          "type": "SOP",
+          "title": "[가상 SOP] 서버 부팅 실패와 메인보드 오류",
+          "score": 0.232017
+        },
+        {
+          "id": "a7dc8e4c-af6a-5693-9879-ed99b09b2460",
+          "type": "TICKET",
+          "title": "[가상 티켓] 메모리 DIMM ECC 오류",
+          "score": 0.211157
+        },
+        {
+          "id": "fdd310b3-ec76-4184-8e98-03bcd34a03e5",
+          "type": "SOP",
+          "title": "[가상 SOP] 메모리 DIMM ECC 오류",
+          "score": 0.2
+        },
+        {
+          "id": "a0ef3bd5-bd8f-47cf-a755-17953c8d2ec7",
+          "type": "SOP",
+          "title": "[가상 SOP] 디스크 SMART 장애와 RAID 성능 저하",
+          "score": 0.18334
+        }
+      ],
+      "embedding_ms": 0.24,
+      "elapsed_ms": 5.31,
+      "matched": 2,
+      "reciprocal_rank": 0.3333333333333333
+    },
+    {
+      "label": "disk-paraphrase",
+      "query": "저장장치 자체 진단이 경고를 내고 디스크 배열에서 구성원 한 개가 빠졌다",
+      "split": "holdout",
+      "expected_ids": [
+        "a0ef3bd5-bd8f-47cf-a755-17953c8d2ec7",
+        "a008ac0d-ecb4-5dc3-a386-da8e40018ada"
+      ],
+      "actual": [
+        {
+          "id": "a0ef3bd5-bd8f-47cf-a755-17953c8d2ec7",
+          "type": "SOP",
+          "title": "[가상 SOP] 디스크 SMART 장애와 RAID 성능 저하",
+          "score": 0.237933
+        },
+        {
+          "id": "a008ac0d-ecb4-5dc3-a386-da8e40018ada",
+          "type": "TICKET",
+          "title": "[가상 티켓] 디스크 SMART 장애와 RAID 성능 저하",
+          "score": 0.221147
+        },
+        {
+          "id": "f49da16c-59df-4c6f-9710-ab765eb2b028",
+          "type": "SOP",
+          "title": "[가상 SOP] 전원 공급 장치 PSU 이중화 경고",
+          "score": 0.159842
+        },
+        {
+          "id": "7d0d471c-7fb2-403b-b762-fdbe969d58af",
+          "type": "SOP",
+          "title": "[가상 SOP] 네트워크 링크 불량과 패킷 손실",
+          "score": 0.157563
+        },
+        {
+          "id": "83428fd8-a2a5-56be-a9e6-6caefa8000e4",
+          "type": "TICKET",
+          "title": "[가상 티켓] 전원 공급 장치 PSU 이중화 경고",
+          "score": 0.155538
+        }
+      ],
+      "embedding_ms": 0.18,
+      "elapsed_ms": 4.9,
+      "matched": 2,
+      "reciprocal_rank": 1.0
+    },
+    {
+      "label": "network-paraphrase",
+      "query": "연결이 간헐적으로 끊기고 전송한 데이터 일부가 목적지에 도달하지 않는다",
+      "split": "holdout",
+      "expected_ids": [
+        "7d0d471c-7fb2-403b-b762-fdbe969d58af",
+        "8ce85b7b-fc24-52b1-9470-d0c00bace839"
+      ],
+      "actual": [
+        {
+          "id": "8ce85b7b-fc24-52b1-9470-d0c00bace839",
+          "type": "TICKET",
+          "title": "[가상 티켓] 네트워크 링크 불량과 패킷 손실",
+          "score": 0.13484
+        },
+        {
+          "id": "7d0d471c-7fb2-403b-b762-fdbe969d58af",
+          "type": "SOP",
+          "title": "[가상 SOP] 네트워크 링크 불량과 패킷 손실",
+          "score": 0.122932
+        },
+        {
+          "id": "fdd310b3-ec76-4184-8e98-03bcd34a03e5",
+          "type": "SOP",
+          "title": "[가상 SOP] 메모리 DIMM ECC 오류",
+          "score": 0.092582
+        },
+        {
+          "id": "6a467bc5-6187-48dd-9a17-e15377369553",
+          "type": "SOP",
+          "title": "[가상 SOP] BMC 관리 인터페이스 접근 실패",
+          "score": 0.084515
+        },
+        {
+          "id": "48bdae70-1792-5c1b-91d1-97facd4120b6",
+          "type": "TICKET",
+          "title": "[가상 티켓] 서버 부팅 실패와 메인보드 오류",
+          "score": 0.069584
+        }
+      ],
+      "embedding_ms": 0.33,
+      "elapsed_ms": 6.32,
+      "matched": 2,
+      "reciprocal_rank": 1.0
+    },
+    {
+      "label": "power-paraphrase",
+      "query": "이중화 전원 중 한쪽 입력이 사라지고 남은 공급 장치로 작동한다",
+      "split": "holdout",
+      "expected_ids": [
+        "f49da16c-59df-4c6f-9710-ab765eb2b028",
+        "83428fd8-a2a5-56be-a9e6-6caefa8000e4"
+      ],
+      "actual": [
+        {
+          "id": "f49da16c-59df-4c6f-9710-ab765eb2b028",
+          "type": "SOP",
+          "title": "[가상 SOP] 전원 공급 장치 PSU 이중화 경고",
+          "score": 0.397236
+        },
+        {
+          "id": "83428fd8-a2a5-56be-a9e6-6caefa8000e4",
+          "type": "TICKET",
+          "title": "[가상 티켓] 전원 공급 장치 PSU 이중화 경고",
+          "score": 0.395856
+        },
+        {
+          "id": "fdd310b3-ec76-4184-8e98-03bcd34a03e5",
+          "type": "SOP",
+          "title": "[가상 SOP] 메모리 DIMM ECC 오류",
+          "score": 0.076222
+        },
+        {
+          "id": "a7dc8e4c-af6a-5693-9879-ed99b09b2460",
+          "type": "TICKET",
+          "title": "[가상 티켓] 메모리 DIMM ECC 오류",
+          "score": 0.053649
+        },
+        {
+          "id": "6f93540d-9db1-414b-8462-2641d5f96ed9",
+          "type": "SOP",
+          "title": "[가상 SOP] 서버 부팅 실패와 메인보드 오류",
+          "score": 0.046967
+        }
+      ],
+      "embedding_ms": 0.14,
+      "elapsed_ms": 4.41,
+      "matched": 2,
+      "reciprocal_rank": 1.0
+    },
+    {
+      "label": "negative-coffee",
+      "query": "회의실 커피머신 원두를 구매하려면 어떻게 하나요?",
+      "split": "calibration",
+      "expected_ids": [],
+      "actual": [
+        {
+          "id": "7d0d471c-7fb2-403b-b762-fdbe969d58af",
+          "type": "SOP",
+          "title": "[가상 SOP] 네트워크 링크 불량과 패킷 손실",
+          "score": 0.105976
+        },
+        {
+          "id": "6f93540d-9db1-414b-8462-2641d5f96ed9",
+          "type": "SOP",
+          "title": "[가상 SOP] 서버 부팅 실패와 메인보드 오류",
+          "score": 0.099602
+        },
+        {
+          "id": "48bdae70-1792-5c1b-91d1-97facd4120b6",
+          "type": "TICKET",
+          "title": "[가상 티켓] 서버 부팅 실패와 메인보드 오류",
+          "score": 0.081666
+        },
+        {
+          "id": "8ce85b7b-fc24-52b1-9470-d0c00bace839",
+          "type": "TICKET",
+          "title": "[가상 티켓] 네트워크 링크 불량과 패킷 손실",
+          "score": 0.066315
+        },
+        {
+          "id": "a008ac0d-ecb4-5dc3-a386-da8e40018ada",
+          "type": "TICKET",
+          "title": "[가상 티켓] 디스크 SMART 장애와 RAID 성능 저하",
+          "score": 0.046971
+        }
+      ],
+      "embedding_ms": 0.16,
+      "elapsed_ms": 4.03,
+      "matched": 0,
+      "reciprocal_rank": 0
+    },
+    {
+      "label": "negative-leave",
+      "query": "연차 신청과 승인 일정을 알려줘",
+      "split": "calibration",
+      "expected_ids": [],
+      "actual": [
+        {
+          "id": "6098088f-9a43-481a-9ef2-7b9469bc9de2",
+          "type": "SOP",
+          "title": "[가상 SOP] CPU 사용률 급증과 프로세스 과부하",
+          "score": 0.171499
+        },
+        {
+          "id": "6a467bc5-6187-48dd-9a17-e15377369553",
+          "type": "SOP",
+          "title": "[가상 SOP] BMC 관리 인터페이스 접근 실패",
+          "score": 0.136293
+        },
+        {
+          "id": "fdd310b3-ec76-4184-8e98-03bcd34a03e5",
+          "type": "SOP",
+          "title": "[가상 SOP] 메모리 DIMM ECC 오류",
+          "score": 0.132842
+        },
+        {
+          "id": "5d12901e-5d39-5d71-83ad-6b7ae1097cbf",
+          "type": "TICKET",
+          "title": "[가상 티켓] CPU 사용률 급증과 프로세스 과부하",
+          "score": 0.132412
+        },
+        {
+          "id": "6f93540d-9db1-414b-8462-2641d5f96ed9",
+          "type": "SOP",
+          "title": "[가상 SOP] 서버 부팅 실패와 메인보드 오류",
+          "score": 0.122988
+        }
+      ],
+      "embedding_ms": 0.11,
+      "elapsed_ms": 4.33,
+      "matched": 0,
+      "reciprocal_rank": 0
+    },
+    {
+      "label": "negative-furniture",
+      "query": "구내식당 의자 배치와 책상 주문",
+      "split": "calibration",
+      "expected_ids": [],
+      "actual": [
+        {
+          "id": "6f93540d-9db1-414b-8462-2641d5f96ed9",
+          "type": "SOP",
+          "title": "[가상 SOP] 서버 부팅 실패와 메인보드 오류",
+          "score": 0.139762
+        },
+        {
+          "id": "48bdae70-1792-5c1b-91d1-97facd4120b6",
+          "type": "TICKET",
+          "title": "[가상 티켓] 서버 부팅 실패와 메인보드 오류",
+          "score": 0.120199
+        },
+        {
+          "id": "6098088f-9a43-481a-9ef2-7b9469bc9de2",
+          "type": "SOP",
+          "title": "[가상 SOP] CPU 사용률 급증과 프로세스 과부하",
+          "score": 0.067488
+        },
+        {
+          "id": "5d12901e-5d39-5d71-83ad-6b7ae1097cbf",
+          "type": "TICKET",
+          "title": "[가상 티켓] CPU 사용률 급증과 프로세스 과부하",
+          "score": 0.057807
+        },
+        {
+          "id": "fdd310b3-ec76-4184-8e98-03bcd34a03e5",
+          "type": "SOP",
+          "title": "[가상 SOP] 메모리 DIMM ECC 오류",
+          "score": 0.044357
+        }
+      ],
+      "embedding_ms": 0.16,
+      "elapsed_ms": 4.77,
+      "matched": 0,
+      "reciprocal_rank": 0
+    },
+    {
+      "label": "negative-invoice",
+      "query": "지난달 세금계산서 발행과 정산 문의",
+      "split": "calibration",
+      "expected_ids": [],
+      "actual": [
+        {
+          "id": "6a467bc5-6187-48dd-9a17-e15377369553",
+          "type": "SOP",
+          "title": "[가상 SOP] BMC 관리 인터페이스 접근 실패",
+          "score": 0.076472
+        },
+        {
+          "id": "10e29387-b575-5168-b817-07d21963ed9f",
+          "type": "TICKET",
+          "title": "[가상 티켓] BMC 관리 인터페이스 접근 실패",
+          "score": 0.050738
+        },
+        {
+          "id": "7d0d471c-7fb2-403b-b762-fdbe969d58af",
+          "type": "SOP",
+          "title": "[가상 SOP] 네트워크 링크 불량과 패킷 손실",
+          "score": 0.046587
+        },
+        {
+          "id": "f49da16c-59df-4c6f-9710-ab765eb2b028",
+          "type": "SOP",
+          "title": "[가상 SOP] 전원 공급 장치 PSU 이중화 경고",
+          "score": 0.04521
+        },
+        {
+          "id": "48bdae70-1792-5c1b-91d1-97facd4120b6",
+          "type": "TICKET",
+          "title": "[가상 티켓] 서버 부팅 실패와 메인보드 오류",
+          "score": 0.042928
+        }
+      ],
+      "embedding_ms": 0.18,
+      "elapsed_ms": 6.56,
+      "matched": 0,
+      "reciprocal_rank": 0
+    },
+    {
+      "label": "negative-training",
+      "query": "사내 발표 교육의 장소와 교재를 알려주세요",
+      "split": "calibration",
+      "expected_ids": [],
+      "actual": [
+        {
+          "id": "fdd310b3-ec76-4184-8e98-03bcd34a03e5",
+          "type": "SOP",
+          "title": "[가상 SOP] 메모리 DIMM ECC 오류",
+          "score": 0.103054
+        },
+        {
+          "id": "a7dc8e4c-af6a-5693-9879-ed99b09b2460",
+          "type": "TICKET",
+          "title": "[가상 티켓] 메모리 DIMM ECC 오류",
+          "score": 0.091705
+        },
+        {
+          "id": "6a467bc5-6187-48dd-9a17-e15377369553",
+          "type": "SOP",
+          "title": "[가상 SOP] BMC 관리 인터페이스 접근 실패",
+          "score": 0.08571
+        },
+        {
+          "id": "10e29387-b575-5168-b817-07d21963ed9f",
+          "type": "TICKET",
+          "title": "[가상 티켓] BMC 관리 인터페이스 접근 실패",
+          "score": 0.070728
+        },
+        {
+          "id": "6098088f-9a43-481a-9ef2-7b9469bc9de2",
+          "type": "SOP",
+          "title": "[가상 SOP] CPU 사용률 급증과 프로세스 과부하",
+          "score": 0.04828
+        }
+      ],
+      "embedding_ms": 0.12,
+      "elapsed_ms": 5.23,
+      "matched": 0,
+      "reciprocal_rank": 0
+    },
+    {
+      "label": "negative-book",
+      "query": "이번 달 독서 모임에서 읽을 책을 추천해줘",
+      "split": "holdout",
+      "expected_ids": [],
+      "actual": [
+        {
+          "id": "6098088f-9a43-481a-9ef2-7b9469bc9de2",
+          "type": "SOP",
+          "title": "[가상 SOP] CPU 사용률 급증과 프로세스 과부하",
+          "score": 0.022646
+        },
+        {
+          "id": "fdd310b3-ec76-4184-8e98-03bcd34a03e5",
+          "type": "SOP",
+          "title": "[가상 SOP] 메모리 DIMM ECC 오류",
+          "score": 0.022222
+        },
+        {
+          "id": "7d0d471c-7fb2-403b-b762-fdbe969d58af",
+          "type": "SOP",
+          "title": "[가상 SOP] 네트워크 링크 불량과 패킷 손실",
+          "score": 0.020307
+        },
+        {
+          "id": "6f93540d-9db1-414b-8462-2641d5f96ed9",
+          "type": "SOP",
+          "title": "[가상 SOP] 서버 부팅 실패와 메인보드 오류",
+          "score": 0.019335
+        },
+        {
+          "id": "6a467bc5-6187-48dd-9a17-e15377369553",
+          "type": "SOP",
+          "title": "[가상 SOP] BMC 관리 인터페이스 접근 실패",
+          "score": 0.018732
+        }
+      ],
+      "embedding_ms": 0.17,
+      "elapsed_ms": 4.87,
+      "matched": 0,
+      "reciprocal_rank": 0
+    },
+    {
+      "label": "negative-delivery",
+      "query": "회의실에 간식을 배달할 주문 번호를 확인해줘",
+      "split": "holdout",
+      "expected_ids": [],
+      "actual": [
+        {
+          "id": "fdd310b3-ec76-4184-8e98-03bcd34a03e5",
+          "type": "SOP",
+          "title": "[가상 SOP] 메모리 DIMM ECC 오류",
+          "score": 0.084384
+        },
+        {
+          "id": "f49da16c-59df-4c6f-9710-ab765eb2b028",
+          "type": "SOP",
+          "title": "[가상 SOP] 전원 공급 장치 PSU 이중화 경고",
+          "score": 0.077762
+        },
+        {
+          "id": "a7dc8e4c-af6a-5693-9879-ed99b09b2460",
+          "type": "TICKET",
+          "title": "[가상 티켓] 메모리 DIMM ECC 오류",
+          "score": 0.068264
+        },
+        {
+          "id": "6f93540d-9db1-414b-8462-2641d5f96ed9",
+          "type": "SOP",
+          "title": "[가상 SOP] 서버 부팅 실패와 메인보드 오류",
+          "score": 0.06647
+        },
+        {
+          "id": "6a467bc5-6187-48dd-9a17-e15377369553",
+          "type": "SOP",
+          "title": "[가상 SOP] BMC 관리 인터페이스 접근 실패",
+          "score": 0.065795
+        }
+      ],
+      "embedding_ms": 0.12,
+      "elapsed_ms": 6.57,
+      "matched": 0,
+      "reciprocal_rank": 0
+    },
+    {
+      "label": "negative-rain",
+      "query": "비가 올 때 가죽 신발을 보관하는 방법",
+      "split": "holdout",
+      "expected_ids": [],
+      "actual": [
+        {
+          "id": "a0ef3bd5-bd8f-47cf-a755-17953c8d2ec7",
+          "type": "SOP",
+          "title": "[가상 SOP] 디스크 SMART 장애와 RAID 성능 저하",
+          "score": 0.080354
+        },
+        {
+          "id": "a008ac0d-ecb4-5dc3-a386-da8e40018ada",
+          "type": "TICKET",
+          "title": "[가상 티켓] 디스크 SMART 장애와 RAID 성능 저하",
+          "score": 0.078285
+        },
+        {
+          "id": "10e29387-b575-5168-b817-07d21963ed9f",
+          "type": "TICKET",
+          "title": "[가상 티켓] BMC 관리 인터페이스 접근 실패",
+          "score": 0.048262
+        },
+        {
+          "id": "6098088f-9a43-481a-9ef2-7b9469bc9de2",
+          "type": "SOP",
+          "title": "[가상 SOP] CPU 사용률 급증과 프로세스 과부하",
+          "score": 0.047338
+        },
+        {
+          "id": "7d0d471c-7fb2-403b-b762-fdbe969d58af",
+          "type": "SOP",
+          "title": "[가상 SOP] 네트워크 링크 불량과 패킷 손실",
+          "score": 0.04239
+        }
+      ],
+      "embedding_ms": 0.12,
+      "elapsed_ms": 4.53,
+      "matched": 0,
+      "reciprocal_rank": 0
+    },
+    {
+      "label": "negative-travel",
+      "query": "출근 버스 운행표와 환승 시간을 알고 싶어요",
+      "split": "holdout",
+      "expected_ids": [],
+      "actual": [
+        {
+          "id": "f49da16c-59df-4c6f-9710-ab765eb2b028",
+          "type": "SOP",
+          "title": "[가상 SOP] 전원 공급 장치 PSU 이중화 경고",
+          "score": 0.262071
+        },
+        {
+          "id": "83428fd8-a2a5-56be-a9e6-6caefa8000e4",
+          "type": "TICKET",
+          "title": "[가상 티켓] 전원 공급 장치 PSU 이중화 경고",
+          "score": 0.236786
+        },
+        {
+          "id": "a0ef3bd5-bd8f-47cf-a755-17953c8d2ec7",
+          "type": "SOP",
+          "title": "[가상 SOP] 디스크 SMART 장애와 RAID 성능 저하",
+          "score": 0.094211
+        },
+        {
+          "id": "fdd310b3-ec76-4184-8e98-03bcd34a03e5",
+          "type": "SOP",
+          "title": "[가상 SOP] 메모리 DIMM ECC 오류",
+          "score": 0.056878
+        },
+        {
+          "id": "6a467bc5-6187-48dd-9a17-e15377369553",
+          "type": "SOP",
+          "title": "[가상 SOP] BMC 관리 인터페이스 접근 실패",
+          "score": 0.053934
+        }
+      ],
+      "embedding_ms": 0.12,
+      "elapsed_ms": 4.55,
+      "matched": 0,
+      "reciprocal_rank": 0
+    },
+    {
+      "label": "negative-printer",
+      "query": "사무실 프린터에서 용지가 걸립니다",
+      "split": "holdout",
+      "expected_ids": [],
+      "actual": [
+        {
+          "id": "6098088f-9a43-481a-9ef2-7b9469bc9de2",
+          "type": "SOP",
+          "title": "[가상 SOP] CPU 사용률 급증과 프로세스 과부하",
+          "score": 0.126592
+        },
+        {
+          "id": "6f93540d-9db1-414b-8462-2641d5f96ed9",
+          "type": "SOP",
+          "title": "[가상 SOP] 서버 부팅 실패와 메인보드 오류",
+          "score": 0.124805
+        },
+        {
+          "id": "5d12901e-5d39-5d71-83ad-6b7ae1097cbf",
+          "type": "TICKET",
+          "title": "[가상 티켓] CPU 사용률 급증과 프로세스 과부하",
+          "score": 0.108433
+        },
+        {
+          "id": "48bdae70-1792-5c1b-91d1-97facd4120b6",
+          "type": "TICKET",
+          "title": "[가상 티켓] 서버 부팅 실패와 메인보드 오류",
+          "score": 0.096628
+        },
+        {
+          "id": "fdd310b3-ec76-4184-8e98-03bcd34a03e5",
+          "type": "SOP",
+          "title": "[가상 SOP] 메모리 DIMM ECC 오류",
+          "score": 0.057378
+        }
+      ],
+      "embedding_ms": 0.12,
+      "elapsed_ms": 4.58,
+      "matched": 0,
+      "reciprocal_rank": 0
+    },
+    {
+      "label": "boot-startup",
+      "query": "장비 기동 직후 자체 진단 코드 B101이 표시되고 운영체제 화면 전 검사에서 실패합니다",
+      "split": "challenge",
+      "expected_ids": [
+        "6f93540d-9db1-414b-8462-2641d5f96ed9",
+        "48bdae70-1792-5c1b-91d1-97facd4120b6"
+      ],
+      "actual": [
+        {
+          "id": "fdd310b3-ec76-4184-8e98-03bcd34a03e5",
+          "type": "SOP",
+          "title": "[가상 SOP] 메모리 DIMM ECC 오류",
+          "score": 0.272311
+        },
+        {
+          "id": "6f93540d-9db1-414b-8462-2641d5f96ed9",
+          "type": "SOP",
+          "title": "[가상 SOP] 서버 부팅 실패와 메인보드 오류",
+          "score": 0.268827
+        },
+        {
+          "id": "48bdae70-1792-5c1b-91d1-97facd4120b6",
+          "type": "TICKET",
+          "title": "[가상 티켓] 서버 부팅 실패와 메인보드 오류",
+          "score": 0.25875
+        },
+        {
+          "id": "a7dc8e4c-af6a-5693-9879-ed99b09b2460",
+          "type": "TICKET",
+          "title": "[가상 티켓] 메모리 DIMM ECC 오류",
+          "score": 0.215285
+        },
+        {
+          "id": "6a467bc5-6187-48dd-9a17-e15377369553",
+          "type": "SOP",
+          "title": "[가상 SOP] BMC 관리 인터페이스 접근 실패",
+          "score": 0.191868
+        }
+      ],
+      "embedding_ms": 0.14,
+      "elapsed_ms": 5.13,
+      "matched": 2,
+      "reciprocal_rank": 0.5
+    },
+    {
+      "label": "boot-not-power",
+      "query": "전원을 켜면 PSU의 양쪽 입력은 정상인데 POST 중 B101 메인보드 진단 오류로 멈춥니다",
+      "split": "contrast",
+      "expected_ids": [
+        "6f93540d-9db1-414b-8462-2641d5f96ed9",
+        "48bdae70-1792-5c1b-91d1-97facd4120b6"
+      ],
+      "actual": [
+        {
+          "id": "6f93540d-9db1-414b-8462-2641d5f96ed9",
+          "type": "SOP",
+          "title": "[가상 SOP] 서버 부팅 실패와 메인보드 오류",
+          "score": 0.309839
+        },
+        {
+          "id": "48bdae70-1792-5c1b-91d1-97facd4120b6",
+          "type": "TICKET",
+          "title": "[가상 티켓] 서버 부팅 실패와 메인보드 오류",
+          "score": 0.296383
+        },
+        {
+          "id": "f49da16c-59df-4c6f-9710-ab765eb2b028",
+          "type": "SOP",
+          "title": "[가상 SOP] 전원 공급 장치 PSU 이중화 경고",
+          "score": 0.195085
+        },
+        {
+          "id": "83428fd8-a2a5-56be-a9e6-6caefa8000e4",
+          "type": "TICKET",
+          "title": "[가상 티켓] 전원 공급 장치 PSU 이중화 경고",
+          "score": 0.190837
+        },
+        {
+          "id": "fdd310b3-ec76-4184-8e98-03bcd34a03e5",
+          "type": "SOP",
+          "title": "[가상 SOP] 메모리 DIMM ECC 오류",
+          "score": 0.136717
+        }
+      ],
+      "embedding_ms": 0.15,
+      "elapsed_ms": 4.36,
+      "matched": 2,
+      "reciprocal_rank": 1.0
+    },
+    {
+      "label": "power-not-boot",
+      "query": "서버 자체 검사는 정상이며 부팅은 됩니다. PSU B 입력이 사라져 이중화 경고가 발생합니다",
+      "split": "contrast",
+      "expected_ids": [
+        "f49da16c-59df-4c6f-9710-ab765eb2b028",
+        "83428fd8-a2a5-56be-a9e6-6caefa8000e4"
+      ],
+      "actual": [
+        {
+          "id": "f49da16c-59df-4c6f-9710-ab765eb2b028",
+          "type": "SOP",
+          "title": "[가상 SOP] 전원 공급 장치 PSU 이중화 경고",
+          "score": 0.267379
+        },
+        {
+          "id": "83428fd8-a2a5-56be-a9e6-6caefa8000e4",
+          "type": "TICKET",
+          "title": "[가상 티켓] 전원 공급 장치 PSU 이중화 경고",
+          "score": 0.262321
+        },
+        {
+          "id": "6f93540d-9db1-414b-8462-2641d5f96ed9",
+          "type": "SOP",
+          "title": "[가상 SOP] 서버 부팅 실패와 메인보드 오류",
+          "score": 0.191118
+        },
+        {
+          "id": "48bdae70-1792-5c1b-91d1-97facd4120b6",
+          "type": "TICKET",
+          "title": "[가상 티켓] 서버 부팅 실패와 메인보드 오류",
+          "score": 0.152331
+        },
+        {
+          "id": "a7dc8e4c-af6a-5693-9879-ed99b09b2460",
+          "type": "TICKET",
+          "title": "[가상 티켓] 메모리 DIMM ECC 오류",
+          "score": 0.07074
+        }
+      ],
+      "embedding_ms": 0.19,
+      "elapsed_ms": 4.44,
+      "matched": 2,
+      "reciprocal_rank": 1.0
+    },
+    {
+      "label": "absent-device",
+      "query": "광학 테이프 장비의 가상 진단 코드 QZ-9741 복구 절차",
+      "split": "absence",
+      "expected_ids": [],
+      "actual": [
+        {
+          "id": "6f93540d-9db1-414b-8462-2641d5f96ed9",
+          "type": "SOP",
+          "title": "[가상 SOP] 서버 부팅 실패와 메인보드 오류",
+          "score": 0.266557
+        },
+        {
+          "id": "48bdae70-1792-5c1b-91d1-97facd4120b6",
+          "type": "TICKET",
+          "title": "[가상 티켓] 서버 부팅 실패와 메인보드 오류",
+          "score": 0.24891
+        },
+        {
+          "id": "fdd310b3-ec76-4184-8e98-03bcd34a03e5",
+          "type": "SOP",
+          "title": "[가상 SOP] 메모리 DIMM ECC 오류",
+          "score": 0.222131
+        },
+        {
+          "id": "f49da16c-59df-4c6f-9710-ab765eb2b028",
+          "type": "SOP",
+          "title": "[가상 SOP] 전원 공급 장치 PSU 이중화 경고",
+          "score": 0.220798
+        },
+        {
+          "id": "a0ef3bd5-bd8f-47cf-a755-17953c8d2ec7",
+          "type": "SOP",
+          "title": "[가상 SOP] 디스크 SMART 장애와 RAID 성능 저하",
+          "score": 0.220798
+        }
+      ],
+      "embedding_ms": 0.13,
+      "elapsed_ms": 4.39,
+      "matched": 0,
+      "reciprocal_rank": 0
+    }
+  ]
+}

@@ -196,10 +196,13 @@ export function HandoverDashboard({ session }: { session: Session }) {
   const before = params.get('before') || ''
   const current = shifts?.find(shift => shift.id === shiftId)
   useEffect(() => {
+    let cancelled = false
     api<{ items: Shift[] }>('/shift-instances').then(({ items }) => {
+      if (cancelled) return
       setShifts(items)
       setShiftId(items.find(item => item.is_member && Date.parse(item.starts_at) <= Date.now())?.id || '')
-    }).catch(failure => setError(errorMessage(failure)))
+    }).catch(failure => { if (!cancelled) setError(errorMessage(failure)) })
+    return () => { cancelled = true }
   }, [])
   useEffect(() => {
     const filters = new URLSearchParams()

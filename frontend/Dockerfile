@@ -13,7 +13,9 @@ FROM dependencies AS build
 RUN npm run build
 
 FROM nginx:1.30-alpine@sha256:901e593c95dc85f5a729f5765516321366ef4ac401821431d408897e95287d0a AS proxy
+COPY nginx/log-format.conf /etc/nginx/conf.d/00-polytech-log.conf
 COPY nginx/proxy.conf /etc/nginx/polytech/proxy.conf
+COPY nginx/request-errors.conf /etc/nginx/polytech/request-errors.conf
 
 FROM proxy AS local
 COPY nginx/local.conf /etc/nginx/conf.d/default.conf

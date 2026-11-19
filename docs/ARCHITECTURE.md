@@ -79,7 +79,7 @@ flowchart LR
 
 ## 운영 상태와 경계
 
-- 인증은 서버 세션과 Argon2id 해시를 사용한다. 운영 쿠키는 `HttpOnly`, `Secure`, `SameSite=Lax`를 사용한다. 상태를 바꾸는 요청은 출처와 CSRF 토큰을 검사한다. API에만 CSRF 서명 키를 주입한다. 로그인은 계정·출처별 속도 제한을 적용한다.
+- 인증은 서버 세션과 Argon2id 해시를 사용한다. 운영 쿠키는 `HttpOnly`, `Secure`, `SameSite=Lax`를 사용한다. 상태를 바꾸는 요청은 출처와 CSRF 토큰을 검사한다. API에만 CSRF 서명 키를 주입한다. Nginx는 클라이언트 주소별 로그인 속도를 제한한다. [현재 검증 범위](KNOWN_ISSUES.md)
 - `GET /health`는 프로세스 생존, 내부 `GET /api/v1/ready`는 DB와 schema revision을 확인한다. Gemini 장애·키 부재·작업 지연은 AI 상태로 관측하며 일반 API는 계속 서비스한다.
 - 로그는 `request_id`, `run_id`, 작업·도구명, 상태, 소요 시간, 오류 코드 중심으로 남긴다. 입력 전문, 쿠키, 인증 정보, 모델 원문과 내부 추론 데이터는 로그에서 제외한다. 요청 오류는 API 오류 형식으로 변환하고 사용자가 취할 수 있는 조치를 화면에 표시한다.
 - 운영 점검은 DB 및 API readiness, 큐 대기 시간, 유실 리스, Gemini 429·5xx 비율, 색인 지연, 디스크·백업 상태를 대상으로 한다. worker가 둘 이상의 인스턴스로 늘어나는 경우에도 실행 ID와 리스로 결과 중복 반영을 막는다.

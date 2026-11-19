@@ -128,6 +128,8 @@ docker compose --env-file .env.prod -p polytech-prod -f compose.yaml -f compose.
 
 운영 Nginx는 정적 React 빌드를 제공한다. 외부 포트는 80과 443이다. 방화벽과 TLS 인증서·갱신은 대상 호스트에서 관리한다. 원본 파일은 `sop_files` 볼륨, 메타데이터와 추출 텍스트는 `db_data` 볼륨에 보존된다. 운영 설정의 임베딩 공급자 기본값은 `gemini`다. 백업 시 두 볼륨을 함께 보존한다.
 
+[Ubuntu 배포·복구 절차](docs/DEPLOYMENT.md) · [5단계 통합 검증 결과](docs/TEST_REPORT.md)
+
 ## 공개 프로토타입
 
 고정 HTTPS 주소로 체험판을 공유하려면 [Cloudflare Tunnel 배포 안내](docs/PUBLIC_DEMO.md)를 따른다. 별도 Compose 프로젝트가 전용 DB와 파일 볼륨을 만들고, 장애 분석과 지식 검색은 Fake provider를 사용한다.
