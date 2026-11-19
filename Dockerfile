@@ -12,7 +12,7 @@ RUN install -d -m 0750 -o 10001 -g 10001 /var/lib/polytech/sops
 
 USER 10001:10001
 EXPOSE 8000
-CMD ["python", "-m", "uvicorn", "main:app", "--host", "0.0.0.0", "--port", "8000"]
+CMD ["python", "-m", "uvicorn", "main:app", "--host", "0.0.0.0", "--port", "8000", "--no-access-log"]
 
 FROM runtime AS test
 USER root

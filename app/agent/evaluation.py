@@ -2,6 +2,7 @@
 
 import argparse
 import json
+import statistics
 import time
 from collections.abc import Sequence
 from dataclasses import dataclass
@@ -54,6 +55,13 @@ CHALLENGE_QUERIES = [
     Query("negative-tls", "TLS 인증서 읽기 오류와 HTTPS 리다이렉트 설정", None, "challenge"),
     Query("negative-db", "PostgreSQL에서 트랜잭션 교착으로 데이터 갱신이 실패합니다", None, "challenge"),
     Query("negative-menu", "점심 행사 참석 인원과 메뉴를 확정해 주세요", None, "challenge"),
+]
+
+PHASE_FIVE_QUERIES = QUERIES + [
+    CHALLENGE_QUERIES[0],
+    Query("boot-not-power", "전원을 켜면 PSU의 양쪽 입력은 정상인데 POST 중 B101 메인보드 진단 오류로 멈춥니다", "boot", "contrast"),
+    Query("power-not-boot", "서버 자체 검사는 정상이며 부팅은 됩니다. PSU B 입력이 사라져 이중화 경고가 발생합니다", "power", "contrast"),
+    Query("absent-device", "광학 테이프 장비의 가상 진단 코드 QZ-9741 복구 절차", None, "absence"),
 ]
 
 
@@ -152,17 +160,85 @@ def evaluate(provider: CountedEmbedder, queries=QUERIES) -> dict:
     }
 
 
+def acceptance_evaluation(provider: CountedEmbedder) -> dict:
+    """Measure the same thresholded search used by the API, on the labeled corpus."""
+    with Session(engine()) as db:
+        sop_ids = dict(db.execute(select(SopDocument.title, SopDocument.id)).all())
+        ticket_ids = dict(db.execute(select(Ticket.title, Ticket.id)).all())
+        profiles = db.execute(select(
+            KnowledgeChunk.embedding_profile, func.vector_dims(KnowledgeChunk.embedding),
+        ).distinct()).all()
+    cases = {case.key: case for case in SCENARIOS}
+    if (set(sop_ids) != {case.sop_title for case in cases.values()}
+            or set(ticket_ids) != {case.ticket_title for case in cases.values()}
+            or [tuple(row) for row in profiles] != [(provider.profile.fingerprint, EMBEDDING_DIM)]):
+        raise SystemExit("Use the isolated, indexed synthetic corpus with one 768-dimensional profile.")
+
+    options = dict(profile=provider.profile.fingerprint, source_types=list(SourceType), limit=5,
+                   min_score=calibrated_min_score(provider.profile.fingerprint))
+    rows = []
+    boot_vector = None
+    for query in PHASE_FIVE_QUERIES:
+        case = cases.get(query.scenario)
+        expected = [str(sop_ids[case.sop_title]), str(ticket_ids[case.ticket_title])] if case else []
+        started = time.perf_counter()
+        vector = provider.query(query.text)
+        embedded = time.perf_counter()
+        with Session(engine()) as db:
+            hits = search_index(db, vector=vector, **options)
+        elapsed_ms = (time.perf_counter() - started) * 1000
+        actual = [{"id": str(hit.source_id), "type": hit.source_type, "title": hit.title, "score": hit.score}
+                  for hit in hits]
+        ranks = [rank for rank, hit in enumerate(actual, 1) if hit["id"] in expected]
+        rows.append(dict(label=query.label, query=query.text, split=query.split, expected_ids=expected,
+                         actual=actual, embedding_ms=round((embedded - started) * 1000, 2),
+                         elapsed_ms=round(elapsed_ms, 2), matched=len(ranks),
+                         reciprocal_rank=1 / ranks[0] if ranks else 0))
+        if query.label == "boot":
+            boot_vector = vector
+
+    removed_id = sop_ids[cases["boot"].sop_title]
+    with Session(engine()) as db:
+        before = [hit.source_id for hit in search_index(db, vector=boot_vector, **options)]
+        db.delete(db.get(SopDocument, removed_id))
+        db.flush()
+        after = [hit.source_id for hit in search_index(db, vector=boot_vector, **options)]
+        db.rollback()
+        restored = [hit.source_id for hit in search_index(db, vector=boot_vector, **options)]
+    positive = [row for row in rows if row["expected_ids"]]
+    negative = [row for row in rows if not row["expected_ids"]]
+    times = [row["elapsed_ms"] for row in rows]
+    return {
+        "provider": provider.profile.provider, "profile": provider.profile.fingerprint,
+        "dimensions": EMBEDDING_DIM, "min_score": options["min_score"],
+        "positive_queries": len(positive), "negative_queries": len(negative),
+        "recall_at_5": statistics.mean(row["matched"] / len(row["expected_ids"]) for row in positive),
+        "precision_at_5": statistics.mean(row["matched"] / 5 for row in positive),
+        "mrr": statistics.mean(row["reciprocal_rank"] for row in positive),
+        "negative_empty": sum(not row["actual"] for row in negative),
+        "latency_ms": {"p50": statistics.median(times), "p95": statistics.quantiles(times, n=20, method="inclusive")[18],
+                       "max": max(times)},
+        "deletion": {"source_id": str(removed_id), "present_before": removed_id in before,
+                     "absent_during_delete": removed_id not in after, "present_after_rollback": removed_id in restored},
+        "document_requests": provider.document_requests, "query_requests": provider.query_requests, "queries": rows,
+    }
+
+
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--prepare", action="store_true", help="Seed and index a fresh isolated Compose project")
     parser.add_argument("--username", default="demo")
-    parser.add_argument("--challenge-only", action="store_true", help="Evaluate a separately labeled challenge set")
+    mode = parser.add_mutually_exclusive_group()
+    mode.add_argument("--challenge-only", action="store_true", help="Evaluate a separately labeled challenge set")
+    mode.add_argument("--phase-five", action="store_true", help="Record thresholded acceptance metrics and deletion behavior")
     args = parser.parse_args()
     try:
         provider = CountedEmbedder(get_embedder())
         if args.prepare:
             prepare(provider, args.username)
-        print(json.dumps(evaluate(provider, CHALLENGE_QUERIES if args.challenge_only else QUERIES), ensure_ascii=False, indent=2))
+        report = (acceptance_evaluation(provider) if args.phase_five
+                  else evaluate(provider, CHALLENGE_QUERIES if args.challenge_only else QUERIES))
+        print(json.dumps(report, ensure_ascii=False, indent=2))
     except EmbeddingFailure as exc:
         print(json.dumps({"error_code": exc.code, "retryable": exc.retryable}))
         raise SystemExit(2) from None

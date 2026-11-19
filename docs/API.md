@@ -7,7 +7,7 @@
 - 업무 경로는 `/api/v1` 아래에 둔다. 아래 표는 접두사를 생략했다. 기존 `GET /health`는 그대로 200과 `{"status":"ok"}`를 반환한다.
 - UUID와 RFC 3339 시간(오프셋 필수), JSON을 사용한다. `PATCH`에서 빠진 필드는 유지하고 명시적 `null`은 nullable 필드만 지운다. 입력의 알려지지 않은 필드는 거부한다.
 - 티켓·SOP 목록은 `{items, next_cursor}`를 사용한다. 인수인계 목록은 `{items, next_before}`를 사용한다. `limit`은 기본 25, 최대 100이다. 티켓 목록은 `updated_at DESC, id DESC`, 인수인계 목록은 `created_at DESC, id DESC`로 정렬한다.
-- 오류는 `{error:{code,message,details,request_id}}`로 통일한다. 401 세션 없음·만료, 403 권한·CSRF 실패, 404 누락 또는 조회할 수 없는 리소스, 409 버전·전이·인계 자료 충돌, 422 잘못된 입력, 429 속도 제한, 503 DB 또는 작업 인프라 불가를 나타낸다. 모든 응답에 `X-Request-ID`를 포함한다. [FastAPI 예외 처리](https://fastapi.tiangolo.com/tutorial/handling-errors/)
+- FastAPI의 오류는 `{error:{code,message,details,request_id}}`를 사용한다. 401 세션 없음·만료, 403 권한·CSRF 실패, 404 누락 또는 조회할 수 없는 리소스, 409 버전·전이·인계 자료 충돌, 422 잘못된 입력, 429 속도 제한, 503 DB 또는 작업 인프라 불가를 나타낸다. FastAPI 응답과 Nginx의 413 `REQUEST_TOO_LARGE` 및 로그인 429 `SIGNIN_RATE_LIMIT`에 `X-Request-ID`를 포함한다. [FastAPI 예외 처리](https://fastapi.tiangolo.com/tutorial/handling-errors/)
 - 로그인 성공 시 세션 쿠키와 CSRF 값을 응답한다. 같은 출처의 `GET /auth/session`은 새로 고침 후 CSRF 값을 돌려준다. 로그인은 `Origin`을 검사하고 인증 이후 쓰기 요청은 `Origin`과 `X-CSRF-Token`을 검사한다. 개발 기본 환경은 루프백 HTTP, 운영 환경은 TLS 쿠키다.
 - 티켓과 보고서 변경은 `expected_version`을 받는다. 상태 변경·배정·메모·작업은 동일 티켓 버전을 공유한다. `DELETE`는 `expected_version` 쿼리 인자를 받는다. 버전이 변경되면 409 `VERSION_CONFLICT`와 현재 버전을 반환한다.
 - 장애 분석과 인수인계 분석은 사용자당 진행 중인 실행 한 건을 공유한다. 인수인계 분석은 보고서당 진행 중인 실행도 한 건으로 제한한다.
@@ -25,6 +25,7 @@
 | `GET /ready` | 200 DB·스키마 준비, 503 의존성 미준비 | 내부 운영 점검 |
 
 인수인계 권한은 활성 세션의 사용자와 DB에 등록된 근무조 소속으로 판단한다. 화면은 회차별 `is_member, is_lead` 및 보고서 상세의 `permissions`를 사용한다.
+현재 로그인·세션 응답의 `roles`와 `memberships`는 각각 `["operator"]`와 `[]`를 반환한다.
 
 ## 티켓과 후속 작업
 
