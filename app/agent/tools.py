@@ -104,7 +104,7 @@ class Toolbox:
             if isinstance(args, OpenArgs):
                 filters = args.filters
                 stmt = select(Ticket).where(
-                    Ticket.archived_at.is_(None), Ticket.status.in_(("open", "in_progress", "waiting"))
+                    Ticket.simulation_run_id.is_(None), Ticket.archived_at.is_(None), Ticket.status.in_(("open", "in_progress", "waiting"))
                 )
                 if filters.status is not None:
                     stmt = stmt.where(Ticket.status == filters.status)
@@ -117,7 +117,7 @@ class Toolbox:
                     for ticket in tickets
                 ]
 
-            ticket = db.get(Ticket, args.ticket_id)
+            ticket = db.scalar(select(Ticket).where(Ticket.id == args.ticket_id, Ticket.simulation_run_id.is_(None)))
             if ticket is None:
                 raise LookupError("Ticket missing")
             if name == "get_ticket_details":

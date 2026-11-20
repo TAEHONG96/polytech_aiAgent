@@ -5,6 +5,7 @@ from app.db import engine
 from app.handover import models as handover_models  # Register the handover tables in Base.metadata.
 from app.knowledge import models  # Register the knowledge tables in Base.metadata.
 from app.settings import settings
+from app.simulation import models as simulation_models  # Register simulation tables.
 
 
 def run_migrations() -> None:

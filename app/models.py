@@ -1,7 +1,7 @@
 from datetime import datetime
 from uuid import UUID, uuid4
 
-from sqlalchemy import CheckConstraint, DateTime, ForeignKey, Identity, Index, Integer, String, Text, UniqueConstraint
+from sqlalchemy import CheckConstraint, DateTime, ForeignKey, ForeignKeyConstraint, Identity, Index, Integer, String, Text, UniqueConstraint
 from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column
 
@@ -45,6 +45,27 @@ class Ticket(Base):
         ),
         CheckConstraint("archived_at IS NULL OR status = 'closed'", name="ck_tickets_archive"),
         CheckConstraint("version >= 1", name="ck_tickets_version"),
+        CheckConstraint(
+            "(simulation_run_id IS NULL AND scenario_id IS NULL AND scenario_host_id IS NULL "
+            "AND scenario_ticket_template_id IS NULL AND training_origin IS NULL) OR "
+            "(simulation_run_id IS NOT NULL AND scenario_id IS NOT NULL AND scenario_host_id IS NOT NULL "
+            "AND scenario_ticket_template_id IS NOT NULL AND training_origin IS NOT NULL "
+            "AND shift_instance_id IS NULL)",
+            name="ck_tickets_simulation_seed",
+        ),
+        ForeignKeyConstraint(
+            ["simulation_run_id", "scenario_id", "scenario_host_id"],
+            ["simulation_run_hosts.simulation_run_id", "simulation_run_hosts.scenario_id",
+             "simulation_run_hosts.scenario_host_id"],
+            name="fk_tickets_run_host",
+        ),
+        ForeignKeyConstraint(
+            ["scenario_id", "scenario_host_id", "scenario_ticket_template_id", "training_origin"],
+            ["scenario_ticket_templates.scenario_id", "scenario_ticket_templates.scenario_host_id",
+             "scenario_ticket_templates.id", "scenario_ticket_templates.origin"],
+            name="fk_tickets_scenario_template",
+        ),
+        UniqueConstraint("simulation_run_id", "scenario_ticket_template_id", name="uq_tickets_run_template"),
     )
 
     id: Mapped[UUID] = mapped_column(primary_key=True, default=uuid4)
@@ -69,6 +90,12 @@ class Ticket(Base):
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
     updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
     archived_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+
+    simulation_run_id: Mapped[UUID | None]
+    scenario_id: Mapped[UUID | None]
+    scenario_host_id: Mapped[UUID | None]
+    scenario_ticket_template_id: Mapped[UUID | None]
+    training_origin: Mapped[str | None] = mapped_column(String(10))
 
     @property
     def display_number(self) -> str:

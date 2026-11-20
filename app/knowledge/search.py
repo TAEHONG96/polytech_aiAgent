@@ -71,6 +71,7 @@ def search_index(
             or_(
                 SopDocument.id.is_not(None),
                 (Ticket.version == IndexJob.ticket_version)
+                & Ticket.simulation_run_id.is_(None)
                 & Ticket.status.in_(RESOLVED_STATUSES)
                 & Ticket.archived_at.is_(None)
                 & Ticket.resolution.is_not(None),

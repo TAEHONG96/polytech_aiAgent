@@ -10,7 +10,7 @@ from app.agent.schemas import MAX_MESSAGE, MAX_TOOL_CALLS, AnalyzeInput, RunStat
 from app.auth import CurrentUser, WriteUser
 from app.db import Database
 from app.http import ApiError
-from app.models import Ticket
+from app.tickets import ticket_by_id
 
 router = APIRouter(prefix="/agent", tags=["agent"])
 
@@ -33,8 +33,8 @@ def run_view(run: AgentRun, calls: list[AgentToolCall]) -> dict:
 
 @router.post("/analyze", status_code=202)
 def analyze(body: AnalyzeInput, response: Response, db: Database, user: WriteUser) -> dict:
-    if body.ticket_id is not None and db.get(Ticket, body.ticket_id) is None:
-        raise ApiError(404, "TICKET_NOT_FOUND", "티켓을 찾을 수 없습니다.")
+    if body.ticket_id is not None:
+        ticket_by_id(db, body.ticket_id)
     user_id = user.id
     run = AgentRun(
         requested_by=user_id, ticket_id=body.ticket_id, message=clean_text(body.message, MAX_MESSAGE),

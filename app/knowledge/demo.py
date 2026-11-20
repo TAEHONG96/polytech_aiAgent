@@ -196,7 +196,8 @@ def reindex_existing() -> int:
         documents = list(db.scalars(select(SopDocument).order_by(SopDocument.id).with_for_update()))
         tickets = list(db.scalars(
             select(Ticket).where(
-                Ticket.status.in_(RESOLVED_STATUSES), Ticket.archived_at.is_(None), Ticket.resolution.is_not(None)
+                Ticket.simulation_run_id.is_(None), Ticket.status.in_(RESOLVED_STATUSES),
+                Ticket.archived_at.is_(None), Ticket.resolution.is_not(None)
             ).order_by(Ticket.id).with_for_update()
         ))
         for document in documents:

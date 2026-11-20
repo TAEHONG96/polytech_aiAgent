@@ -56,7 +56,7 @@ def collect_snapshot(
 ) -> list[dict]:
     manual = selection.include_ticket_ids + selection.exclude_ticket_ids
     if manual:
-        existing = set(db.scalars(select(Ticket.id).where(Ticket.id.in_(manual))))
+        existing = set(db.scalars(select(Ticket.id).where(Ticket.id.in_(manual), Ticket.simulation_run_id.is_(None))))
         if missing := set(manual) - existing:
             raise ApiError(404, "TICKET_NOT_FOUND", "선택한 티켓을 찾을 수 없습니다.",
                            {"ticket_ids": sorted(map(str, missing))})
@@ -82,7 +82,7 @@ def collect_snapshot(
         select(Ticket, active.label("active"), pending.label("pending"), scheduled.label("scheduled"),
                approval.label("approval"), activity.label("activity"), carryover.label("carryover"), assigned_here.label("assigned"))
         .outerjoin(assigned, Ticket.shift_instance_id == assigned.id)
-        .where(Ticket.archived_at.is_(None), or_(automatic, Ticket.id.in_(selection.include_ticket_ids)),
+        .where(Ticket.simulation_run_id.is_(None), Ticket.archived_at.is_(None), or_(automatic, Ticket.id.in_(selection.include_ticket_ids)),
                Ticket.id.not_in(selection.exclude_ticket_ids))
         .order_by(Ticket.severity, Ticket.number)
     ).all()

@@ -189,7 +189,9 @@ def reindex_sop(sop_id: UUID, db: Database, user: WriteUser) -> IndexRequest:
 
 @router.post("/knowledge/tickets/{ticket_id}/reindex", status_code=202)
 def reindex_ticket(ticket_id: UUID, db: Database, user: WriteUser) -> IndexRequest:
-    ticket = db.get(Ticket, ticket_id, with_for_update=True)
+    ticket = db.scalar(select(Ticket).where(
+        Ticket.id == ticket_id, Ticket.simulation_run_id.is_(None),
+    ).with_for_update())
     if ticket is None:
         raise ApiError(404, "TICKET_NOT_FOUND", "티켓을 찾을 수 없습니다.")
     if not ticket_is_indexable(ticket):
