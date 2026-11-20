@@ -172,7 +172,7 @@ def view(ticket: Ticket) -> TicketView:
 
 
 def ticket_by_id(db: Session, ticket_id: UUID, *, lock: bool = False) -> Ticket:
-    statement = select(Ticket).where(Ticket.id == ticket_id)
+    statement = select(Ticket).where(Ticket.id == ticket_id, Ticket.simulation_run_id.is_(None))
     if lock:
         lock_ticket_snapshot(db)
         statement = statement.with_for_update()
@@ -261,7 +261,7 @@ def list_tickets(
 ) -> TicketPage:
     search = (q or "").strip()
     fingerprint = hashlib.sha256(json.dumps([search, status, severity, scope]).encode()).hexdigest()
-    statement = select(Ticket)
+    statement = select(Ticket).where(Ticket.simulation_run_id.is_(None))
     if scope == Scope.ACTIVE:
         statement = statement.where(Ticket.archived_at.is_(None))
     elif scope == Scope.ARCHIVED:

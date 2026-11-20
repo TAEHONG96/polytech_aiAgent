@@ -60,16 +60,15 @@ erDiagram
 | `title` | text | NOT NULL |
 | `timezone` | text | 기본 `Asia/Seoul` |
 | `virtual_start_at` | timestamptz | 고정 시작 가상 시점 |
-| `seed_hash` | text | 동일 버전 데이터 무결성 검증 |
 | `is_published` | boolean | 공개된 버전은 불변 |
-| `config` | jsonb | Bot 초기 보고서·이벤트 소요시간 등 **검증된** 설정 |
+| `config` | jsonb | Bot 초기 보고서·평가 규칙 버전·근거 버전 등 **검증된** 설정 |
 
 ### `scenario_shift_slots`
 
 `id uuid PK`, `scenario_id uuid FK`, `slot_order smallint`, `crew_code text (A/B/C/D)`, `shift_type text (DAY/NIGHT)`, `starts_at timestamptz`, `ends_at timestamptz`, `actor_type text (BOT/TRAINEE)`.
 
 - `(scenario_id, slot_order)` UNIQUE. 발행 검증에서 이전·현재·다음 **정확히 3개**의 순서와 인접한 시간 경계, `BOT → TRAINEE → BOT`을 확인한다. 실행은 이 발행 슬롯을 참조한다.
-- A/B/C/D 조 코드, `Asia/Seoul` 날짜와 오프셋을 사용한다. 주간 08:00–20:00, 야간 20:00–익일 08:00이다. 장기 로테이션 계산은 MVP 범위에서 제외한다.
+- A/B/C/D 조 코드, `Asia/Seoul` 날짜와 오프셋을 사용한다. 주간 08:00–20:00, 야간 20:00–익일 08:00이다. 최초 현재 슬롯은 주간이다. 장기 로테이션 계산은 MVP 범위에서 제외한다.
 
 ### `scenario_hosts`
 
@@ -87,26 +86,26 @@ erDiagram
 
 ### `scenario_ticket_templates` (**제안**)
 
-`id uuid PK`, `scenario_id uuid FK`, `scenario_host_id uuid FK`, `template_key text`, `initial_ticket jsonb`, `origin text (INITIAL | CARRYOVER)`, `detected_at timestamptz`, `action_rules jsonb`. `(scenario_id,template_key)` UNIQUE.
+`id uuid PK`, `scenario_id uuid FK`, `scenario_host_id uuid FK`, `template_key text`, `initial_ticket jsonb`, `origin text (INITIAL | CARRYOVER)`, `detected_at timestamptz`. `(scenario_id,template_key)` UNIQUE.
 
 - 초기 실습(`INITIAL`)·이전 Bot 이월(`CARRYOVER`) 템플릿을 신규 `tickets.id`로 복제하고 출처를 보존한다. 이월 티켓은 이전 Bot 보고서가 참조하는 템플릿 중 실제 인계 대상이다. 보고서 스냅샷에는 같은 실행의 복제 ID를 연결한다. 두 유형 모두 필수 평가 대상이다.
 - 기존 `knowledge/demo.py` 시드를 버전화하는 대안도 가능. 다만 **발행된 버전은 불변**이어야 함.
-- `action_rules`에는 행동별 사전 조건·결과·가상 시간 증분을 선언. 실제 조치와 단순 메모는 구별.
+- 후속 단계의 `action_rules`에는 행동별 사전 조건과 결과를 선언. 실제 조치와 단순 메모는 구별.
 
 ### `simulation_runs`
 
-`id uuid PK`, `user_id FK users`, `scenario_id FK`, `status text CHECK (ACTIVE, COMPLETED)`, `virtual_now timestamptz`, `started_at timestamptz`, `completed_at timestamptz NULL`, `incoming_report_snapshot jsonb`, `finalized_handover_id uuid NULL`, `finalized_revision int NULL`, `start_request_key text NULL`, `seed_version text`.
+`id uuid PK`, `user_id FK users`, `scenario_id FK`, `status text CHECK (ACTIVE, COMPLETED)`, `started_at timestamptz`, `completed_at timestamptz NULL`, `incoming_report_snapshot jsonb`, `start_request_key varchar(128) NOT NULL`. 후속 단계에 확정 보고서와 리비전 FK를 추가한다.
 
 - `NOT_STARTED`는 해당 사용자에게 현재 ACTIVE 행이 없는 홈 상태다. 과거 완료 행은 존재할 수 있다.
 - `status='COMPLETED'`이면 `completed_at IS NOT NULL` 및 확정 보고서 참조를 검사.
-- 사용자당 ACTIVE 1개 (partial UNIQUE); `(user_id,start_request_key)` 부분 UNIQUE (키 존재 시).
+- 사용자당 ACTIVE 1개 (partial UNIQUE); `(user_id,start_request_key)` UNIQUE.
 - 실행 생성은 호스트/티켓/리포트 링크 복제와 **원자적 트랜잭션**.
 - 완료 후 실행 원본은 변경 불가. 재실습은 신규 실행.
 - 확정 보고서·리비전은 같은 실행의 발신 보고서를 참조한다. 빈 유효 초안의 초기화 시점은 구현에서 정하며 AI 작업에 의존하지 않는다.
 
 ### `simulation_activity_events` (**제안**)
 
-`id uuid PK`, `simulation_run_id FK`, `ticket_id NULL`, `event_type text`, `virtual_at timestamptz`, `occurred_at timestamptz`, `payload jsonb`, `actor_type text`, `source_ref text`.
+`id uuid PK`, `simulation_run_id FK`, `ticket_id NULL`, `event_type text`, `event_sequence bigint`, `occurred_at timestamptz` (서버 기록 시각), `payload jsonb`, `actor_type text`, `source_ref text`.
 
 - 티켓 기존 `ticket_events`/`ticket_work`와 중복 기록을 최소화; SOP 열람, 호스트 조회, 인계 수신 확인 등 기존 감사 이력에 없는 **교육 행동** 위주.
 - 평가 규칙에서 '열람'과 '실제 활용'을 구분.
@@ -159,11 +158,9 @@ erDiagram
 ## 6. 권장 인덱스(제안 SQL)
 
 ```sql
-CREATE UNIQUE INDEX uq_sim_run_active_user
+CREATE UNIQUE INDEX uq_simulation_run_active
   ON simulation_runs(user_id) WHERE status = 'ACTIVE';
-CREATE UNIQUE INDEX uq_sim_run_start_key
-  ON simulation_runs(user_id, start_request_key)
-  WHERE start_request_key IS NOT NULL;
+-- Phase 1의 시작 키는 NOT NULL이며 uq_simulation_run_request 제약으로 유일성을 보장한다.
 CREATE INDEX idx_sim_run_user_history
   ON simulation_runs(user_id, started_at DESC, id);
 -- 기존 tickets에 컬럼 추가가 확인된 경우에만 적용
@@ -182,7 +179,7 @@ CREATE INDEX idx_scenario_incidents_host_time
 교육 확정은 [단일 finalize API](API_SPEC.md#49-인계-확정--실습-종료)에 연결한다. 실행·멱등 키·요청 내용 식별값과 확정 리비전/성공 응답의 연결을 영속화한다. 동일 DB 트랜잭션에서 다음 작업을 수행한다.
 
 1. `simulation_runs` 실행 행 잠금(`FOR UPDATE` 권장)과 사용자 소유권을 확인한다. 저장된 동일 요청은 결과를 재사용한다. 신규 확정은 ACTIVE 초안의 리비전을 검증한다.
-2. 요청의 보고서 리비전과 수집 당시 원본 버전을 확인한다. 보고서의 편집·재수집 또는 원본 버전 변경은 충돌이다. 시계 경과·파생 경고의 변경은 버전 비교에서 제외한다.
+2. 요청의 보고서 리비전과 수집 당시 원본 버전을 확인한다. 보고서의 편집·재수집 또는 원본 버전 변경은 충돌이다. 파생 경고의 변경은 버전 비교에서 제외한다.
 3. 요청과 보고서의 구조·참조 무결성을 검증한다. 업무상 누락은 경고로 수집한다. 후보에서 빠진 초기·이월 티켓도 확정 입력에 포함한다.
 4. 보고서 최종 리비전과 해당 경고를 고정한다.
 5. `simulation_runs.status=COMPLETED`, `completed_at`·확정 보고서/리비전 기록.
@@ -191,14 +188,20 @@ CREATE INDEX idx_scenario_incidents_host_time
 
 티켓·작업 변경도 동일한 실행 잠금 순서에 참여해 확정 이후 늦게 커밋되는 경쟁을 막는다. 동일 멱등 키와 요청의 성공 응답은 확정 결과와 함께 식별·보존한다. 재전송은 기존 응답을 반환하고 완료 이후 이전 초안 버전으로 들어온 별개 요청은 버전 충돌로 처리한다. 확정·평가·AI 처리의 동시성은 각각의 무결성 조건을 유지한다.
 
-## 8. Alembic 마이그레이션 운영 계획
+## 8. Phase 1 물리 스키마와 Alembic 마이그레이션
 
-- 알려진 체인: `0001_ticket_foundation → 0002_knowledge → 0003_agent → 0004_handover`. 신규 revision 예: `0005_simulation_foundation` (**파일명 제안**, 현재 head 검증 필요).
+- `0005_simulation_foundation`은 시나리오, 슬롯, 호스트와 티켓 템플릿, 실행, 실행별 호스트 상태를 추가한다. 발행 슬롯과 고정 시작 시각은 시나리오에서 조회한다. 초기 교육 티켓에는 실행, 시나리오, 호스트, 템플릿, 출처를 연결한다. 복합 FK가 각 연결의 시나리오·호스트 일치를 검증한다. Bot 보고서의 템플릿 키는 실행별 복제 티켓 ID로 바꿔 저장한다.
+- 사용자 행동 이벤트는 향후 `(occurred_at, event_sequence)`로 정렬하며 실행별 이벤트 순번의 유일성을 보장한다. 종료 시 행동 범위와 평가 규칙 버전을 고정한다. 소요 시간과 근무시간 준수 여부는 평가에서 제외한다. 종료 후 도착한 AI 결과는 분석 이력에만 저장한다.
+- 실행은 근무 종료 시각과 독립적이다. 교육 발신 인계 최종 확정이 유일한 완료 전이다. 인계 FK와 평가 스냅샷은 후속 단계에서 추가한다.
+- 운영 행의 교육 필드는 모두 NULL이다. 기존 운영 회차 FK를 유지하며 실습은 발행된 슬롯을 참조한다. 티켓 UUID는 실행마다 새로 생성하며 표시 번호는 현행 전역 INC 시퀀스를 사용한다.
+
+
+- 알려진 체인: `0001_ticket_foundation → 0002_knowledge → 0003_agent → 0004_handover`. 신규 revision 예: `0005_simulation_foundation`.
 - 1단계 additive 변경: 신규 테이블/nullable 컬럼/보조 인덱스. 기존 운영 데이터 변경 금지.
 - 2단계 합성 승인 데이터 변환/시나리오 템플릿 발행/참조 검증.
 - 3단계 범위 검증 및 복합 제약 추가/교육 기능 활성화.
 - 테스트: 빈 DB upgrade, 레거시 복제 upgrade, 이전 SOP/임베딩/리비전 보존, 스키마 readiness, 실행 실패 롤백, DB + SOP volume 복원.
-- downgrade 시 교육 기록이 삭제될 가능성이 있으므로 운영 downgrade 안전성을 별도 명시, **임의 자동 downgrade 금지**.
+- 교육 실행이 한 건이라도 있으면 Phase 1 downgrade를 차단한다. 운영 환경에서 자동 downgrade는 금지한다.
 
 ## 9. 구현 전 확인 항목
 

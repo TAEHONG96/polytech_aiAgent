@@ -27,7 +27,10 @@ def now_utc() -> datetime:
 
 
 def ticket_is_indexable(ticket: Ticket) -> bool:
-    return ticket.status in RESOLVED_STATUSES and ticket.archived_at is None and bool(ticket.resolution)
+    return (
+        ticket.simulation_run_id is None and ticket.status in RESOLVED_STATUSES
+        and ticket.archived_at is None and bool(ticket.resolution)
+    )
 
 
 def _reset(job: IndexJob, now: datetime) -> None:
