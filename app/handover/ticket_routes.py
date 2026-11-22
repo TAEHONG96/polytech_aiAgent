@@ -20,7 +20,8 @@ OPS_FIELDS = ("shift_instance_id", "owner_id", "warnings", "approval_required")
 
 
 def require_owner(db: Database, owner_id: UUID | None) -> None:
-    if owner_id and not db.scalar(select(User.id).where(User.id == owner_id, User.is_active.is_(True))):
+    if owner_id and not db.scalar(select(User.id).where(User.id == owner_id, User.is_active.is_(True),
+                                                        User.role == "operator")):
         raise ApiError(404, "OPERATOR_NOT_FOUND", "활성 운영자를 찾을 수 없습니다.")
 
 
@@ -42,8 +43,17 @@ def read_operations(ticket_id: UUID, db: Database, user: CurrentUser) -> dict:
 
 @router.put("/{ticket_id}/operations")
 def update_operations(ticket_id: UUID, body: TicketOperations, db: Database, user: WriteUser) -> dict:
-    ticket = ticket_by_id(db, ticket_id, lock=True)
+    return edit_operations(db, user, ticket_id, body)
+
+
+def edit_operations(db: Database, user: User, ticket_id: UUID, body: TicketOperations, run_id: UUID | None = None) -> dict:
+    ticket = ticket_by_id(db, ticket_id, lock=True, run_id=run_id)
     ensure_editable(ticket, body.expected_version)
+    if run_id is not None:
+        if body.shift_instance_id is not None or body.owner_id not in (None, user.id):
+            raise ApiError(404, "ASSIGNMENT_NOT_FOUND", "실습 범위의 담당 또는 회차를 찾을 수 없습니다.")
+        apply_changes(db, ticket, user.id, "operations_updated", body.model_dump(exclude={"expected_version"}))
+        return operations(db, ticket)
     require_owner(db, body.owner_id)
     shift = get_shift(db, body.shift_instance_id) if body.shift_instance_id else None
     if body.owner_id and (shift is None or db.get(ShiftMembership, (shift.team_id, body.owner_id)) is None):
@@ -52,14 +62,19 @@ def update_operations(ticket_id: UUID, body: TicketOperations, db: Database, use
     return operations(db, ticket)
 
 
-def save_work(db: Database, user: User, ticket_id: UUID, body: WorkInput, work_id: UUID | None = None) -> dict:
-    ticket = ticket_by_id(db, ticket_id, lock=True)
+def save_work(db: Database, user: User, ticket_id: UUID, body: WorkInput, work_id: UUID | None = None,
+              run_id: UUID | None = None) -> dict:
+    ticket = ticket_by_id(db, ticket_id, lock=True, run_id=run_id)
     ensure_editable(ticket, body.expected_version)
-    require_owner(db, body.owner_id)
+    if run_id is None:
+        require_owner(db, body.owner_id)
+    elif body.owner_id not in (None, user.id):
+        raise ApiError(404, "ASSIGNMENT_NOT_FOUND", "실습 범위의 담당자를 찾을 수 없습니다.")
     if ticket.status == "closed" and body.status != "done":
         raise ApiError(409, "TICKET_ALREADY_CLOSED", "종료된 티켓에는 미완료 작업을 기록할 수 없습니다.")
-    task = db.get(TicketWork, work_id) if work_id else TicketWork(ticket_id=ticket.id)
-    if task is None or task.ticket_id != ticket.id:
+    task = db.scalar(select(TicketWork).where(TicketWork.id == work_id, TicketWork.ticket_id == ticket.id)) \
+        if work_id else TicketWork(ticket_id=ticket.id)
+    if task is None:
         raise ApiError(404, "WORK_NOT_FOUND", "이 티켓의 작업을 찾을 수 없습니다.")
     before = jsonable_encoder(work_view(task)) if work_id else None
     for field, value in body.model_dump(exclude={"expected_version"}).items():

@@ -4,12 +4,13 @@ from datetime import datetime, timedelta, timezone
 from functools import lru_cache
 from secrets import token_urlsafe
 from typing import Annotated
+from uuid import uuid4
 
 from argon2 import PasswordHasher
 from argon2.exceptions import InvalidHashError, VerificationError
 from fastapi import APIRouter, Depends, Request, Response
 from pydantic import BaseModel, ConfigDict, StringConstraints
-from sqlalchemy import delete, select
+from sqlalchemy import delete, func, select
 
 from app.db import Database
 from app.http import ApiError
@@ -26,6 +27,14 @@ class LoginInput(BaseModel):
     model_config = ConfigDict(extra="forbid")
     username: Annotated[str, StringConstraints(strip_whitespace=True, min_length=1, max_length=64)]
     password: Annotated[str, StringConstraints(min_length=1, max_length=256)]
+
+
+class RegistrationInput(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    username: Annotated[str, StringConstraints(
+        strip_whitespace=True, min_length=3, max_length=64, pattern=r"^[a-zA-Z0-9][a-zA-Z0-9_.-]*$",
+    )]
+    password: Annotated[str, StringConstraints(min_length=12, max_length=128)]
 
 
 def token_hash(token: str) -> str:
@@ -61,6 +70,11 @@ def require_user(request: Request, db: Database) -> User:
 CurrentUser = Annotated[User, Depends(require_user)]
 
 
+def require_operator(user: CurrentUser) -> None:
+    if user.role != "operator":
+        raise ApiError(403, "OPERATOR_REQUIRED", "운영 계정으로 로그인하세요.")
+
+
 def require_write_user(request: Request, user: CurrentUser) -> User:
     require_origin(request)
     expected = csrf_value(request.cookies[SESSION_COOKIE]).encode()
@@ -76,7 +90,7 @@ WriteUser = Annotated[User, Depends(require_write_user)]
 def session_payload(user: User, token: str) -> dict:
     return {
         "user": {"id": user.id, "username": user.username, "display_name": user.display_name},
-        "roles": ["operator"],
+        "roles": [user.role],
         "memberships": [],
         "csrf_token": csrf_value(token),
     }
@@ -85,6 +99,26 @@ def session_payload(user: User, token: str) -> dict:
 @lru_cache
 def dummy_password_hash() -> str:
     return password_hasher.hash(token_urlsafe(32))
+
+
+@router.post("/register", status_code=201)
+def register(body: RegistrationInput, request: Request, response: Response, db: Database) -> dict:
+    if not settings().training_registration:
+        raise ApiError(404, "NOT_FOUND", "요청한 경로를 찾을 수 없습니다.")
+    require_origin(request)
+    cookie = request.cookies.get(SESSION_COOKIE)
+    if cookie and db.scalar(select(LoginSession.token_hash).where(
+        LoginSession.token_hash == token_hash(cookie), LoginSession.expires_at > datetime.now(timezone.utc),
+    )):
+        raise ApiError(409, "ALREADY_AUTHENTICATED", "로그아웃 후 가입하세요.")
+    username = body.username.casefold()
+    user_id = db.scalar(select(func.register_training_user(uuid4(), username, body.username,
+                                                           password_hasher.hash(body.password))))
+    if user_id is None:
+        raise ApiError(409, "USERNAME_TAKEN", "이미 사용 중인 사용자명입니다.")
+    db.commit()
+    response.headers["Cache-Control"] = "no-store"
+    return {"id": user_id, "username": username, "display_name": body.username}
 
 
 @router.post("/login")

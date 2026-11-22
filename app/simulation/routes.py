@@ -3,7 +3,7 @@ from typing import Annotated
 from uuid import UUID, uuid4
 from zoneinfo import ZoneInfo
 
-from fastapi import APIRouter, Depends, Header, Response
+from fastapi import APIRouter, Header, Query, Response
 from pydantic import BaseModel, ConfigDict, StringConstraints
 from sqlalchemy import select, text
 
@@ -11,8 +11,10 @@ from app.auth import CurrentUser, WriteUser
 from app.db import Database
 from app.http import ApiError
 from app.models import Ticket
+from app.simulation.access import OwnedRun, WritableRun
 from app.simulation.models import Scenario, ScenarioHost, ScenarioShiftSlot, ScenarioTicketTemplate, SimulationRun, SimulationRunHost
-from app.tickets import record_event, view
+from app.tickets import (Scope, Severity, TicketCreate, TicketStatus, TicketUpdate, Transition, archive, edit_ticket,
+                         insert_ticket, record_event, select_ticket_page, ticket_by_id, transition_ticket, view)
 
 router = APIRouter(tags=["simulation"])
 
@@ -30,16 +32,6 @@ def active_run(db: Database, user_id: UUID) -> SimulationRun | None:
     return db.scalar(select(SimulationRun).where(
         SimulationRun.user_id == user_id, SimulationRun.status == "ACTIVE",
     ))
-
-
-def owned_run(run_id: UUID, db: Database, user: CurrentUser) -> SimulationRun:
-    run = db.scalar(select(SimulationRun).where(SimulationRun.id == run_id, SimulationRun.user_id == user.id))
-    if run is None:
-        raise ApiError(404, "SIMULATION_RUN_NOT_FOUND", "실습 실행을 찾을 수 없습니다.")
-    return run
-
-
-OwnedRun = Annotated[SimulationRun, Depends(owned_run)]
 
 
 def schedule(db: Database, scenario: Scenario) -> list[dict]:
@@ -187,15 +179,55 @@ def training_ticket(ticket: Ticket) -> dict:
 
 
 @router.get("/simulation-runs/{run_id}/tickets")
-def tickets(db: Database, run: OwnedRun) -> dict:
-    return {"items": [training_ticket(ticket) for ticket in db.scalars(
-        select(Ticket).where(Ticket.simulation_run_id == run.id).order_by(Ticket.number),
-    )]}
+def tickets(db: Database, run: OwnedRun, q: Annotated[str | None, Query(max_length=200)] = None,
+            status: TicketStatus | None = None, severity: Severity | None = None, scope: Scope = Scope.ACTIVE,
+            limit: Annotated[int, Query(ge=1, le=100)] = 25,
+            cursor: Annotated[str | None, Query(max_length=512)] = None) -> dict:
+    rows, next_cursor = select_ticket_page(db, run.id, q, status, severity, scope, limit, cursor)
+    return {"items": [training_ticket(ticket) for ticket in rows], "next_cursor": next_cursor}
 
 
 @router.get("/simulation-runs/{run_id}/tickets/{ticket_id}")
 def ticket_detail(ticket_id: UUID, db: Database, run: OwnedRun) -> dict:
-    ticket = db.scalar(select(Ticket).where(Ticket.id == ticket_id, Ticket.simulation_run_id == run.id))
-    if ticket is None:
-        raise ApiError(404, "TICKET_NOT_FOUND", "티켓을 찾을 수 없습니다.")
+    return training_ticket(ticket_by_id(db, ticket_id, run_id=run.id))
+
+
+class TrainingTicketCreate(TicketCreate):
+    scenario_host_id: UUID
+
+
+@router.post("/simulation-runs/{run_id}/tickets", status_code=201)
+def create_training_ticket(body: TrainingTicketCreate, response: Response, db: Database,
+                           run: WritableRun, user: WriteUser) -> dict:
+    if not db.scalar(select(SimulationRunHost.scenario_host_id).where(
+        SimulationRunHost.simulation_run_id == run.id, SimulationRunHost.scenario_host_id == body.scenario_host_id,
+    )):
+        raise ApiError(404, "HOST_NOT_FOUND", "실습 호스트를 찾을 수 없습니다.")
+    ticket = insert_ticket(db, user, body,
+                           simulation_run_id=run.id, scenario_id=run.scenario_id,
+                           scenario_host_id=body.scenario_host_id, training_origin="USER_CREATED")
+    response.headers["Location"] = f"/api/v1/simulation-runs/{run.id}/tickets/{ticket.id}"
     return training_ticket(ticket)
+
+
+@router.patch("/simulation-runs/{run_id}/tickets/{ticket_id}")
+def update_training_ticket(ticket_id: UUID, body: TicketUpdate, db: Database, run: WritableRun, user: WriteUser) -> dict:
+    return training_ticket(edit_ticket(db, user, ticket_id, body, run.id))
+
+
+@router.post("/simulation-runs/{run_id}/tickets/{ticket_id}/transitions")
+def transition_training_ticket(ticket_id: UUID, body: Transition, db: Database, run: WritableRun, user: WriteUser) -> dict:
+    return training_ticket(transition_ticket(db, user, ticket_id, body, run.id))
+
+
+@router.delete("/simulation-runs/{run_id}/tickets/{ticket_id}", status_code=204)
+def archive_training_ticket(ticket_id: UUID, expected_version: Annotated[int, Query(ge=1)], db: Database,
+                            run: WritableRun, user: WriteUser) -> None:
+    archive(db, user, ticket_id, expected_version, run.id)
+
+
+@router.get("/simulation-runs")
+def run_history(db: Database, user: CurrentUser) -> dict:
+    rows = db.scalars(select(SimulationRun).where(SimulationRun.user_id == user.id)
+                     .order_by(SimulationRun.started_at.desc(), SimulationRun.id))
+    return {"items": [run_view(db, run) for run in rows]}

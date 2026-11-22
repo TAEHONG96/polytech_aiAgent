@@ -131,7 +131,7 @@ def test_ticket_history_adaptive_function_call_and_owner_scope(operator):
     assert [event["name"] for event in run["tool_calls"]] == ["get_ticket_details", "get_ticket_history"]
     assert run["result"]["evidence"][0]["source_url"] == "/tickets/" + target["id"]
     assert run["usage"]["model_requests"] == 4
-    app.dependency_overrides[require_user] = lambda: User(id=uuid4())
+    app.dependency_overrides[require_user] = lambda: User(id=uuid4(), role="operator")
     try:
         assert client.get(path).status_code == 404
     finally:

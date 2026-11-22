@@ -47,6 +47,7 @@ services:
     <<: *backend
     environment:
       <<: *app-env
+      APP_TRAINING_REGISTRATION: ${APP_TRAINING_REGISTRATION:-0}
       AGENT_PROVIDER: ${AGENT_PROVIDER:-fake}
       GEMINI_EMBEDDING_MODEL: ${GEMINI_EMBEDDING_MODEL:-gemini-embedding-2}
     volumes:

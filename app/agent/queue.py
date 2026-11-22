@@ -12,11 +12,15 @@ from app.agent.analysis import Trace, Usage, investigate
 from app.agent.models import AgentRun, AgentToolCall
 from app.agent.provider import AnalysisFailure, generator
 from app.agent.schemas import QUEUE_SECONDS, RUN_SECONDS, RunStatus
-from app.agent.tools import Toolbox, require_active_user
+from app.agent.tools import Toolbox
 from app.db import engine
 from app.handover.analysis import draft_handover
-from app.handover.models import Handover, ShiftInstance, ShiftMembership
+from app.handover.models import Handover, HandoverRevision, ShiftInstance, ShiftMembership
 from app.handover.service import snapshot_items
+from app.simulation.access import worker_scope
+from app.simulation.models import ScenarioShiftSlot, SimulationRun
+from app.tickets import ticket_by_id
+from app.http import ApiError
 
 logger = logging.getLogger(__name__)
 ACTIVE_RUNS = (RunStatus.QUEUED, RunStatus.RUNNING)
@@ -36,6 +40,7 @@ class Work:
     deadline: datetime
     handover_id: UUID | None
     handover_version: int | None
+    simulation_run_id: UUID | None
 
 
 class RunLost(Exception):
@@ -75,12 +80,14 @@ def claim_run() -> Work | None:
         run.lease_token = uuid4()
         run.lease_expires_at = deadline + timedelta(seconds=20)
         return Work(run.id, run.requested_by, run.ticket_id, run.message, run.lease_token, deadline,
-                    run.handover_id, run.handover_version)
+                    run.handover_id, run.handover_version, run.simulation_run_id)
 
 
 def owned_run(db: Session, work: Work) -> AgentRun:
     run = db.get(AgentRun, work.id, with_for_update=True)
-    if run is None or run.status != RunStatus.RUNNING or run.lease_token != work.token:
+    if (run is None or run.status != RunStatus.RUNNING or run.lease_token != work.token
+            or (run.requested_by, run.ticket_id, run.handover_id, run.handover_version, run.simulation_run_id)
+            != (work.requested_by, work.ticket_id, work.handover_id, work.handover_version, work.simulation_run_id)):
         raise RunLost()
     return run
 
@@ -94,6 +101,21 @@ def record_trace(work: Work, event: Trace) -> None:
         ))
 
 
+def authorized_handover(db: Session, work: Work) -> Handover:
+    report = db.scalar(select(Handover).where(Handover.id == work.handover_id,
+                                             Handover.simulation_run_id == work.simulation_run_id))
+    if report is None or db.get(HandoverRevision, (report.id, work.handover_version)) is None:
+        raise PermissionError("Invalid handover revision scope")
+    if work.simulation_run_id is not None:
+        if report.created_by != work.requested_by:
+            raise PermissionError("Invalid training report owner")
+    else:
+        shift = db.get(ShiftInstance, report.outgoing_shift_id)
+        if shift is None or not db.get(ShiftMembership, (shift.team_id, work.requested_by)):
+            raise PermissionError("Outgoing shift membership required")
+    return report
+
+
 async def execute(work: Work, model, usage: Usage) -> dict:
     try:
         seconds = (work.deadline - utcnow()).total_seconds()
@@ -101,17 +123,22 @@ async def execute(work: Work, model, usage: Usage) -> dict:
             raise AnalysisFailure("AI_TIMEOUT", "분석 실행 시간이 초과되었습니다.", retryable=True)
         if work.handover_id is not None:
             with Session(engine()) as db:
-                report = db.get(Handover, work.handover_id)
-                shift = db.get(ShiftInstance, report.outgoing_shift_id)
-                if not db.get(ShiftMembership, (shift.team_id, work.requested_by)):
-                    raise PermissionError("Outgoing shift membership required")
-                shift_id = shift.id
-                items = snapshot_items(db, report.id, work.handover_version)
+                worker_scope(db, work.requested_by, work.simulation_run_id)
+                report = authorized_handover(db, work)
+                shift_id = report.outgoing_shift_id
+                if work.simulation_run_id is not None:
+                    scenario_id = db.get(SimulationRun, work.simulation_run_id).scenario_id
+                    shift_id = db.scalar(select(ScenarioShiftSlot.id).where(
+                        ScenarioShiftSlot.scenario_id == scenario_id, ScenarioShiftSlot.slot_order == 1,
+                    ))
+                items = snapshot_items(db, report.id, work.handover_version, run_id=work.simulation_run_id)
             return await draft_handover(shift_id=shift_id, items=items, user_id=work.requested_by, model=model,
-                                        usage=usage, seconds=seconds, trace=lambda event: record_trace(work, event))
+                                        usage=usage, seconds=seconds, trace=lambda event: record_trace(work, event),
+                                        run_id=work.simulation_run_id)
         return await investigate(
             request={"message": work.message, "ticket_id": str(work.ticket_id) if work.ticket_id else None},
-            toolbox=Toolbox(work.requested_by, work.ticket_id), model=model, usage=usage, seconds=seconds,
+            toolbox=Toolbox(work.requested_by, work.ticket_id, run_id=work.simulation_run_id),
+            model=model, usage=usage, seconds=seconds,
             trace=lambda event: record_trace(work, event),
         )
     finally:
@@ -133,7 +160,18 @@ def process_agent_run(model_factory=generator) -> bool:
     model = None
     try:
         with Session(engine()) as db:
-            require_active_user(db, work.requested_by)
+            worker_scope(db, work.requested_by, work.simulation_run_id)
+            if work.ticket_id is not None:
+                try:
+                    ticket_by_id(db, work.ticket_id, run_id=work.simulation_run_id)
+                except ApiError as exc:
+                    raise PermissionError("Invalid analysis ticket scope") from exc
+            if work.handover_id is not None:
+                if work.ticket_id is not None:
+                    raise PermissionError("Invalid analysis parents")
+                authorized_handover(db, work)
+            elif work.simulation_run_id is not None and work.ticket_id is None:
+                raise PermissionError("Invalid training analysis scope")
         model = model_factory()
         with Session(engine()) as db, db.begin():
             run = owned_run(db, work)

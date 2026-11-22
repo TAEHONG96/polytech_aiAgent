@@ -1,5 +1,5 @@
 from datetime import datetime
-from typing import Annotated
+from typing import Annotated, Literal
 from urllib.parse import quote
 from uuid import UUID
 
@@ -57,7 +57,9 @@ class IndexRequest(BaseModel):
 class SearchRequest(BaseModel):
     model_config = ConfigDict(extra="forbid")
     query: Annotated[str, StringConstraints(strip_whitespace=True, min_length=1, max_length=MAX_QUERY_LENGTH)]
-    source_types: list[SourceType] = Field(default_factory=lambda: list(SourceType), min_length=1, max_length=2)
+    source_types: list[Literal[SourceType.SOP, SourceType.TICKET]] = Field(
+        default_factory=lambda: [SourceType.SOP, SourceType.TICKET], min_length=1, max_length=2,
+    )
     limit: Annotated[int, Field(strict=True, ge=1, le=20)] = 5
 
 
@@ -66,20 +68,23 @@ class SearchResponse(BaseModel):
     embedding_profile: str
 
 
-def _summary(document: SopDocument, job: IndexJob) -> SopSummary:
+def _summary(document: SopDocument, job: IndexJob, run_id: UUID | None = None) -> SopSummary:
+    prefix = f"/api/v1/simulation-runs/{run_id}" if run_id else "/api/v1"
     return SopSummary(
         id=document.id, title=document.title, filename=document.filename,
         content_type=document.content_type, size_bytes=document.size_bytes, status=job.status,
         error_code=job.error_code, error_message=job.error_message, attempts=job.attempts,
         indexed_profile=job.indexed_profile, created_at=document.created_at, updated_at=job.updated_at,
-        original_url=f"/api/v1/sops/{document.id}/original",
+        original_url=f"{prefix}/sops/{document.id}/original",
     )
 
 
-def _document(db: Session, sop_id: UUID, *, lock: bool = False) -> tuple[SopDocument, IndexJob]:
+def _document(db: Session, sop_id: UUID, *, lock: bool = False, approved: bool = False) -> tuple[SopDocument, IndexJob]:
     statement = select(SopDocument, IndexJob).join(IndexJob, IndexJob.sop_id == SopDocument.id).where(SopDocument.id == sop_id)
     if lock:
         statement = statement.with_for_update(of=SopDocument)
+    if approved:
+        statement = statement.where(SopDocument.training_approved.is_(True))
     result = db.execute(statement).one_or_none()
     if result is None:
         raise ApiError(404, "SOP_NOT_FOUND", "SOP 문서를 찾을 수 없습니다.")
@@ -128,28 +133,42 @@ async def upload_sop(request: Request, response: Response, db: Database, user: W
 def list_sops(
     db: Database, user: CurrentUser, limit: Annotated[int, Query(ge=1, le=100)] = 25, cursor: UUID | None = None
 ) -> SopPage:
+    return sop_page(db, limit, cursor)
+
+
+def sop_page(db: Session, limit: int, cursor: UUID | None, run_id: UUID | None = None) -> SopPage:
     statement = select(SopDocument, IndexJob).join(IndexJob, IndexJob.sop_id == SopDocument.id)
+    if run_id is not None:
+        statement = statement.where(SopDocument.training_approved.is_(True))
     if cursor is not None:
         after = db.get(SopDocument, cursor)
-        if after is None:
+        if after is None or (run_id is not None and not after.training_approved):
             raise ApiError(422, "INVALID_CURSOR", "문서 목록을 첫 페이지부터 조회하세요.")
         statement = statement.where(tuple_(SopDocument.created_at, SopDocument.id) < (after.created_at, after.id))
     rows = db.execute(statement.order_by(SopDocument.created_at.desc(), SopDocument.id.desc()).limit(limit + 1)).all()
     return SopPage(
-        items=[_summary(document, job) for document, job in rows[:limit]],
+        items=[_summary(document, job, run_id) for document, job in rows[:limit]],
         next_cursor=rows[limit - 1][0].id if len(rows) > limit else None,
     )
 
 
 @router.get("/sops/{sop_id}")
 def read_sop(sop_id: UUID, db: Database, user: CurrentUser) -> SopDetail:
-    document, job = _document(db, sop_id)
-    return SopDetail(**_summary(document, job).model_dump(), extracted_text=document.extracted_text)
+    return sop_detail(db, sop_id)
+
+
+def sop_detail(db: Session, sop_id: UUID, run_id: UUID | None = None) -> SopDetail:
+    document, job = _document(db, sop_id, approved=run_id is not None)
+    return SopDetail(**_summary(document, job, run_id).model_dump(), extracted_text=document.extracted_text)
 
 
 @router.get("/sops/{sop_id}/original")
 def download_sop(sop_id: UUID, db: Database, user: CurrentUser) -> StreamingResponse:
-    document, _ = _document(db, sop_id)
+    return sop_original(db, sop_id)
+
+
+def sop_original(db: Session, sop_id: UUID, *, approved: bool = False) -> StreamingResponse:
+    document, _ = _document(db, sop_id, approved=approved)
     try:
         stream = original_path(document.id).open("rb")
     except FileNotFoundError as exc:
@@ -203,14 +222,23 @@ def reindex_ticket(ticket_id: UUID, db: Database, user: WriteUser) -> IndexReque
 
 @router.post("/knowledge/search")
 def search(body: SearchRequest, db: Database, user: WriteUser) -> SearchResponse:
+    return run_search(db, body)
+
+
+def run_search(db: Session, body: SearchRequest, *, run_id: UUID | None = None,
+               target_id: UUID | None = None) -> SearchResponse:
     try:
         profile = embedding_profile().fingerprint
     except EmbeddingFailure as exc:
         raise ApiError(503, exc.code, str(exc)) from exc
     db.rollback()  # Release the authentication transaction before the worker request.
     vector = worker_query_vector(body.query, profile)
+    target = None
+    if target_id is not None:
+        from app.tickets import ticket_by_id
+        target = ticket_by_id(db, target_id, run_id=run_id)
     results = search_index(
         db, vector=vector, profile=profile, source_types=body.source_types, limit=body.limit,
-        min_score=calibrated_min_score(profile),
+        min_score=calibrated_min_score(profile), run_id=run_id, target=target,
     )
     return SearchResponse(results=results, embedding_profile=profile)

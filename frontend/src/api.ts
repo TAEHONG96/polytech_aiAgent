@@ -34,6 +34,7 @@ export interface TicketPage {
 
 export interface Session {
   user: { display_name: string }
+  roles: string[]
   csrf_token: string
 }
 

@@ -1,3 +1,4 @@
+import logging
 from uuid import uuid4
 
 from fastapi import FastAPI, Request
@@ -7,6 +8,7 @@ from sqlalchemy.exc import OperationalError
 from starlette.exceptions import HTTPException
 
 HTTP_CODES = {404: "NOT_FOUND", 405: "METHOD_NOT_ALLOWED"}
+logger = logging.getLogger(__name__)
 
 
 class ApiError(Exception):
@@ -61,4 +63,8 @@ def install_http_handlers(app: FastAPI) -> None:
 
     @app.exception_handler(OperationalError)
     async def database_error(request: Request, error: OperationalError):
+        route = getattr(request.scope.get("route"), "path", "-")
+        logger.warning("db_unavailable request_id=%s route=%s driver_type=%s sqlstate=%s invalidated=%s",
+                       request.state.request_id, route, type(error.orig).__name__,
+                       getattr(error.orig, "sqlstate", None), error.connection_invalidated)
         return error_response(request, ApiError(503, "DB_UNAVAILABLE", "DB에 연결할 수 없습니다."))

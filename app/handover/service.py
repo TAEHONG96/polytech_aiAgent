@@ -2,7 +2,7 @@ from datetime import datetime, timezone
 from uuid import UUID
 
 from fastapi.encoders import jsonable_encoder
-from sqlalchemy import select
+from sqlalchemy import String, cast, select
 from sqlalchemy.orm import Session
 
 from app.agent.models import AgentRun
@@ -12,7 +12,7 @@ from app.handover.models import Handover, HandoverItem, HandoverRevision, ShiftI
 from app.handover.schemas import HandoverCreate, HandoverEdit, HandoverStatus, ReportBody, Selection
 from app.handover.snapshot import collect_snapshot
 from app.http import ApiError
-from app.models import User
+from app.models import Ticket, User
 
 
 def utcnow() -> datetime:
@@ -49,7 +49,8 @@ def require_membership(db: Session, shift: ShiftInstance, actor_id: UUID, *, lea
 
 
 def get_report(db: Session, report_id: UUID, *, lock: bool = False) -> Handover:
-    report = db.get(Handover, report_id, with_for_update=lock)
+    query = select(Handover).where(Handover.id == report_id, Handover.simulation_run_id.is_(None))
+    report = db.scalar(query.with_for_update() if lock else query)
     if report is None:
         raise ApiError(404, "HANDOVER_NOT_FOUND", "인수인계 보고서를 찾을 수 없습니다.")
     return report
@@ -79,10 +80,16 @@ def require_analysis_idle(db: Session, report: Handover) -> None:
         raise ApiError(409, "HANDOVER_ANALYSIS_BUSY", "진행 중인 분석이 끝난 뒤 다시 시도하세요.", {"run_id": str(active)})
 
 
-def snapshot_items(db: Session, report_id: UUID, snapshot_version: int) -> list[dict]:
-    items = list(db.scalars(select(HandoverItem.ticket_snapshot).where(
+def snapshot_items(db: Session, report_id: UUID, snapshot_version: int, *, run_id: UUID | None = None) -> list[dict]:
+    query = select(HandoverItem.ticket_snapshot).where(
         HandoverItem.handover_id == report_id, HandoverItem.snapshot_version == snapshot_version,
-    )))
+    )
+    if run_id is not None:
+        query = query.join(Ticket, HandoverItem.ticket_id == Ticket.id).where(
+            Ticket.simulation_run_id == run_id,
+            HandoverItem.ticket_snapshot["id"].astext == cast(Ticket.id, String),
+        )
+    items = list(db.scalars(query))
     return sorted(items, key=lambda item: (item["severity"], int(item["number"].split("-")[1])))
 
 

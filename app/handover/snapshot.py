@@ -52,11 +52,11 @@ def gaps(ticket: Ticket, work: list[TicketWork]) -> list[dict]:
 
 def collect_snapshot(
     db: Session, shift: ShiftInstance, selection: Selection, cutoff: datetime, *,
-    validate_inclusions: set[UUID] | None = None,
+    validate_inclusions: set[UUID] | None = None, run_id: UUID | None = None,
 ) -> list[dict]:
     manual = selection.include_ticket_ids + selection.exclude_ticket_ids
     if manual:
-        existing = set(db.scalars(select(Ticket.id).where(Ticket.id.in_(manual), Ticket.simulation_run_id.is_(None))))
+        existing = set(db.scalars(select(Ticket.id).where(Ticket.id.in_(manual), Ticket.simulation_run_id == run_id)))
         if missing := set(manual) - existing:
             raise ApiError(404, "TICKET_NOT_FOUND", "선택한 티켓을 찾을 수 없습니다.",
                            {"ticket_ids": sorted(map(str, missing))})
@@ -68,6 +68,8 @@ def collect_snapshot(
     assigned = aliased(ShiftInstance)
     within = and_(TicketEvent.created_at >= shift.starts_at, TicketEvent.created_at < shift.ends_at,
                   TicketEvent.created_at <= cutoff)
+    if run_id is not None:
+        within = and_(TicketEvent.ticket_version > 1, TicketEvent.created_at <= cutoff)
     activity = select(TicketEvent.id).where(TicketEvent.ticket_id == Ticket.id, within).exists()
     pending = select(TicketWork.id).where(TicketWork.ticket_id == Ticket.id, TicketWork.status != "done").exists()
     scheduled = and_(Ticket.status != "closed", Ticket.recheck_at.is_not(None))
@@ -82,7 +84,7 @@ def collect_snapshot(
         select(Ticket, active.label("active"), pending.label("pending"), scheduled.label("scheduled"),
                approval.label("approval"), activity.label("activity"), carryover.label("carryover"), assigned_here.label("assigned"))
         .outerjoin(assigned, Ticket.shift_instance_id == assigned.id)
-        .where(Ticket.simulation_run_id.is_(None), Ticket.archived_at.is_(None), or_(automatic, Ticket.id.in_(selection.include_ticket_ids)),
+        .where(Ticket.simulation_run_id == run_id, Ticket.archived_at.is_(None), or_(automatic, Ticket.id.in_(selection.include_ticket_ids)),
                Ticket.id.not_in(selection.exclude_ticket_ids))
         .order_by(Ticket.severity, Ticket.number)
     ).all()

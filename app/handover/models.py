@@ -51,6 +51,11 @@ class TicketWork(Base):
 class Handover(Base):
     __tablename__ = "handovers"
     __table_args__ = (
+        CheckConstraint(
+            "(simulation_run_id IS NULL AND outgoing_shift_id IS NOT NULL AND incoming_shift_id IS NOT NULL) OR "
+            "(simulation_run_id IS NOT NULL AND outgoing_shift_id IS NULL AND incoming_shift_id IS NULL "
+            "AND supersedes_id IS NULL AND acknowledged_by IS NULL)", name="ck_handover_scope",
+        ),
         Index("uq_handover_root_shift", "outgoing_shift_id", unique=True, postgresql_where=text("supersedes_id IS NULL")),
         CheckConstraint("outgoing_shift_id <> incoming_shift_id", name="ck_handover_distinct_shifts"),
         CheckConstraint("shift_start_at < shift_end_at", name="ck_handover_period"),
@@ -65,8 +70,9 @@ class Handover(Base):
         ),
     )
     id: Mapped[UUID] = mapped_column(primary_key=True, default=uuid4)
-    outgoing_shift_id: Mapped[UUID] = mapped_column(ForeignKey("shift_instances.id"))
-    incoming_shift_id: Mapped[UUID] = mapped_column(ForeignKey("shift_instances.id"))
+    outgoing_shift_id: Mapped[UUID | None] = mapped_column(ForeignKey("shift_instances.id"))
+    incoming_shift_id: Mapped[UUID | None] = mapped_column(ForeignKey("shift_instances.id"))
+    simulation_run_id: Mapped[UUID | None] = mapped_column(ForeignKey("simulation_runs.id"), unique=True)
     shift_start_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
     shift_end_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
     supersedes_id: Mapped[UUID | None] = mapped_column(ForeignKey("handovers.id"), unique=True)

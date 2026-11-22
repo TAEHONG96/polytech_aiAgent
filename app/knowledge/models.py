@@ -3,7 +3,7 @@ from enum import StrEnum
 from uuid import UUID, uuid4
 
 from pgvector.sqlalchemy import VECTOR
-from sqlalchemy import CheckConstraint, DateTime, ForeignKey, Index, String, Text, UniqueConstraint
+from sqlalchemy import CheckConstraint, DateTime, ForeignKey, Index, String, Text, UniqueConstraint, false
 from sqlalchemy.orm import Mapped, mapped_column
 
 from app.models import Base
@@ -14,6 +14,7 @@ EMBEDDING_DIM = 768
 class SourceType(StrEnum):
     SOP = "SOP"
     TICKET = "TICKET"
+    INCIDENT = "INCIDENT"
 
 
 class IndexStatus(StrEnum):
@@ -36,6 +37,7 @@ class SopDocument(Base):
     content_sha256: Mapped[str] = mapped_column(String(64), unique=True)
     size_bytes: Mapped[int]
     extracted_text: Mapped[str | None] = mapped_column(Text)
+    training_approved: Mapped[bool] = mapped_column(server_default=false())
     created_by: Mapped[UUID] = mapped_column(ForeignKey("users.id"))
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
     updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))

@@ -50,7 +50,8 @@ def preview(shift_id: UUID, db: Database, user: CurrentUser) -> dict:
 
 @router.get("/handover-operators")
 def operators(db: Database, user: CurrentUser) -> dict:
-    users = db.scalars(select(User).where(User.is_active.is_(True)).order_by(User.display_name, User.id))
+    users = db.scalars(select(User).where(User.is_active.is_(True), User.role == "operator")
+                      .order_by(User.display_name, User.id))
     memberships: dict[UUID, list] = {}
     for member in db.scalars(select(ShiftMembership)):
         memberships.setdefault(member.user_id, []).append(member.team_id)
@@ -73,7 +74,7 @@ def report_summary(db: Database, report: Handover) -> dict:
 def list_reports(db: Database, user: CurrentUser, status: HandoverStatus | None = None,
                  outgoing_shift_id: UUID | None = None, before: UUID | None = None,
                  limit: Annotated[int, Query(ge=1, le=100)] = 25) -> dict:
-    query = select(Handover)
+    query = select(Handover).where(Handover.simulation_run_id.is_(None))
     if status:
         query = query.where(Handover.status == status)
     if outgoing_shift_id:

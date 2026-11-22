@@ -27,7 +27,7 @@ from app.db import Database, lock_ticket_snapshot
 from app.handover.models import TicketWork
 from app.http import ApiError
 from app.knowledge.indexing import sync_ticket_index
-from app.models import Ticket, TicketEvent
+from app.models import Ticket, TicketEvent, User
 
 router = APIRouter(prefix="/tickets", tags=["tickets"])
 
@@ -171,10 +171,11 @@ def view(ticket: Ticket) -> TicketView:
     return result
 
 
-def ticket_by_id(db: Session, ticket_id: UUID, *, lock: bool = False) -> Ticket:
-    statement = select(Ticket).where(Ticket.id == ticket_id, Ticket.simulation_run_id.is_(None))
+def ticket_by_id(db: Session, ticket_id: UUID, *, lock: bool = False, run_id: UUID | None = None) -> Ticket:
+    statement = select(Ticket).where(Ticket.id == ticket_id, Ticket.simulation_run_id == run_id)
     if lock:
-        lock_ticket_snapshot(db)
+        if run_id is None:
+            lock_ticket_snapshot(db)
         statement = statement.with_for_update()
     ticket = db.scalar(statement)
     if ticket is None:
@@ -230,10 +231,18 @@ def apply_changes(
 
 @router.post("", status_code=201)
 def create_ticket(body: TicketCreate, response: Response, db: Database, user: WriteUser) -> TicketView:
-    lock_ticket_snapshot(db)
+    ticket = insert_ticket(db, user, body)
+    response.headers["Location"] = f"/api/v1/tickets/{ticket.id}"
+    return view(ticket)
+
+
+def insert_ticket(db: Session, user: User, body: TicketCreate, **training_fields) -> Ticket:
+    if not training_fields:
+        lock_ticket_snapshot(db)
     now = datetime.now(timezone.utc)
     ticket = Ticket(
-        **body.model_dump(),
+        **body.model_dump(exclude={"scenario_host_id"}),
+        **training_fields,
         status=TicketStatus.OPEN,
         created_by=user.id,
         version=1,
@@ -244,8 +253,7 @@ def create_ticket(body: TicketCreate, response: Response, db: Database, user: Wr
     db.flush()
     record_event(db, ticket, user.id, "created", {"values": body.model_dump(), "status": TicketStatus.OPEN})
     db.commit()
-    response.headers["Location"] = f"/api/v1/tickets/{ticket.id}"
-    return view(ticket)
+    return ticket
 
 
 @router.get("")
@@ -259,9 +267,18 @@ def list_tickets(
     limit: Annotated[int, Query(ge=1, le=100)] = 25,
     cursor: Annotated[str | None, Query(max_length=512)] = None,
 ) -> TicketPage:
+    rows, next_cursor = select_ticket_page(db, None, q, status, severity, scope, limit, cursor)
+    return TicketPage(items=[view(ticket) for ticket in rows], next_cursor=next_cursor)
+
+
+def select_ticket_page(db: Session, run_id: UUID | None, q: str | None, status: TicketStatus | None,
+                       severity: Severity | None, scope: Scope, limit: int, cursor: str | None):
     search = (q or "").strip()
-    fingerprint = hashlib.sha256(json.dumps([search, status, severity, scope]).encode()).hexdigest()
-    statement = select(Ticket).where(Ticket.simulation_run_id.is_(None))
+    filters_key = [search, status, severity, scope]
+    if run_id is not None:
+        filters_key.append(str(run_id))
+    fingerprint = hashlib.sha256(json.dumps(filters_key).encode()).hexdigest()
+    statement = select(Ticket).where(Ticket.simulation_run_id == run_id)
     if scope == Scope.ACTIVE:
         statement = statement.where(Ticket.archived_at.is_(None))
     elif scope == Scope.ARCHIVED:
@@ -291,7 +308,7 @@ def list_tickets(
         last = rows[limit - 1]
         point = TicketCursor(updated_at=last.updated_at, id=last.id, fingerprint=fingerprint)
         next_cursor = base64.urlsafe_b64encode(point.model_dump_json().encode()).decode()
-    return TicketPage(items=[view(ticket) for ticket in rows[:limit]], next_cursor=next_cursor)
+    return rows[:limit], next_cursor
 
 
 @router.get("/{ticket_id}")
@@ -301,16 +318,24 @@ def read_ticket(ticket_id: UUID, db: Database, user: CurrentUser) -> TicketView:
 
 @router.patch("/{ticket_id}")
 def update_ticket(ticket_id: UUID, body: TicketUpdate, db: Database, user: WriteUser) -> TicketView:
-    ticket = ticket_by_id(db, ticket_id, lock=True)
+    return view(edit_ticket(db, user, ticket_id, body))
+
+
+def edit_ticket(db: Session, user: User, ticket_id: UUID, body: TicketUpdate, run_id: UUID | None = None) -> Ticket:
+    ticket = ticket_by_id(db, ticket_id, lock=True, run_id=run_id)
     ensure_editable(ticket, body.expected_version)
     fields = body.model_dump(exclude_unset=True, exclude={"expected_version"})
     apply_changes(db, ticket, user.id, "updated", fields)
-    return view(ticket)
+    return ticket
 
 
 @router.post("/{ticket_id}/transitions")
 def change_status(ticket_id: UUID, body: Transition, db: Database, user: WriteUser) -> TicketView:
-    ticket = ticket_by_id(db, ticket_id, lock=True)
+    return view(transition_ticket(db, user, ticket_id, body))
+
+
+def transition_ticket(db: Session, user: User, ticket_id: UUID, body: Transition, run_id: UUID | None = None) -> Ticket:
+    ticket = ticket_by_id(db, ticket_id, lock=True, run_id=run_id)
     ensure_editable(ticket, body.expected_version)
     if body.to_status not in TRANSITIONS[TicketStatus(ticket.status)]:
         raise ApiError(409, "INVALID_TRANSITION", "현재 상태에서 선택한 상태로 전환할 수 없습니다.")
@@ -324,14 +349,18 @@ def change_status(ticket_id: UUID, body: Transition, db: Database, user: WriteUs
     elif body.to_status == TicketStatus.IN_PROGRESS:
         fields.update(resolution=None, resolved_at=None)
     apply_changes(db, ticket, user.id, "transitioned", fields, reason=body.reason)
-    return view(ticket)
+    return ticket
 
 
 @router.delete("/{ticket_id}", status_code=204)
 def archive_ticket(
-    ticket_id: UUID, expected_version: Annotated[int, Query(ge=1)], db: Database, user: WriteUser
+    ticket_id: UUID, expected_version: Annotated[int, Query(ge=1)], db: Database, user: WriteUser,
 ) -> None:
-    ticket = ticket_by_id(db, ticket_id, lock=True)
+    archive(db, user, ticket_id, expected_version)
+
+
+def archive(db: Session, user: User, ticket_id: UUID, expected_version: int, run_id: UUID | None = None) -> None:
+    ticket = ticket_by_id(db, ticket_id, lock=True, run_id=run_id)
     if ticket.archived_at is not None:
         return
     check_version(ticket, expected_version)

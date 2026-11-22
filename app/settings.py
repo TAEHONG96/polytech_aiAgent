@@ -15,6 +15,7 @@ class Settings:
     origin: str
     csrf_secret: str
     secure_cookie: bool
+    training_registration: bool = False
 
 
 @lru_cache
@@ -47,4 +48,9 @@ def settings() -> Settings:
         origin=origin,
         csrf_secret=csrf_secret,
         secure_cookie=parsed.scheme == "https",
+        training_registration=(
+            not production
+            and parsed.hostname in {"127.0.0.1", "localhost", "::1"}
+            and os.environ.get("APP_TRAINING_REGISTRATION") == "1"
+        ),
     )

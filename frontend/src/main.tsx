@@ -5,6 +5,7 @@ import type { FormEvent } from 'react'
 import { createRoot } from 'react-dom/client'
 import { api, ApiError, errorMessage, statuses } from './api'
 import type { Session, Severity, Status, Ticket, TicketPage } from './api'
+import { TrainingPage } from './training'
 import { AgentPage } from './agent'
 import { KnowledgeSearch, SopDetail, SopList } from './knowledge'
 import { HandoverDashboard, HandoverDetail } from './handover'
@@ -330,8 +331,9 @@ function App() {
 
   function startSession(authenticated: Session) {
     if (path === '/login') {
-      window.history.pushState(null, '', '/tickets')
-      setPath('/tickets')
+      const destination = authenticated.roles.includes('trainee') ? '/simulation' : '/tickets'
+      window.history.pushState(null, '', destination)
+      setPath(destination)
     }
     setSession(authenticated)
   }
@@ -347,13 +349,14 @@ function App() {
     }
   }
 
+  const trainee = session?.roles.includes('trainee')
   return (
     <>
       <header><nav className="shell row">
         <div className="row">
-          <a className="brand" href="/tickets">IT 운영 지원</a>
+          <a className="brand" href={trainee ? '/simulation' : '/tickets'}>{trainee ? '장애 대응 실습' : 'IT 운영 지원'}</a>
           <a href="/about" aria-current={path === '/about' ? 'page' : undefined}>소개</a>
-          {session && <><a href="/tickets">장애 티켓</a><a href="/knowledge">SOP 문서</a><a href="/knowledge/search">지식 검색</a><a href="/agent">AI 장애 분석</a><a href="/handovers" aria-current={path.startsWith('/handovers') ? 'page' : undefined}>교대 인수인계</a></>}
+          {session && !trainee && <><a href="/tickets">장애 티켓</a><a href="/knowledge">SOP 문서</a><a href="/knowledge/search">지식 검색</a><a href="/agent">AI 장애 분석</a><a href="/handovers" aria-current={path.startsWith('/handovers') ? 'page' : undefined}>교대 인수인계</a></>}
         </div>
         {session && <div className="row account"><span>{session.user.display_name}</span><button className="secondary" onClick={logout}>로그아웃</button></div>}
       </nav></header>
@@ -362,6 +365,7 @@ function App() {
         {path === '/about' ? <About signedIn={Boolean(session)} />
           : session === undefined ? <p role="status">세션을 확인하는 중입니다.</p>
           : !session ? <Login onLogin={startSession} />
+          : trainee ? <TrainingPage key={path} path={path} session={session} />
           : path === '/agent' ? <AgentPage session={session} />
           : path === '/handovers' ? <HandoverDashboard session={session} />
           : handover ? <HandoverDetail id={handover[1]} session={session} />

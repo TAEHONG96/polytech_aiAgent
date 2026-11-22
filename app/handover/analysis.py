@@ -5,11 +5,14 @@ from uuid import UUID
 
 from google.genai import types
 from pydantic import Field, ValidationError
+from sqlalchemy.orm import Session
 
 from app.agent.analysis import Budget, call_tools, content_of, user_content
 from app.agent.provider import AnalysisFailure, reply
 from app.agent.schemas import GroundingError, MAX_MODEL_REQUESTS, StrictInput, clean_text
 from app.agent.tools import SPECS, TicketArgs, ToolOutcome, Toolbox, rejection
+from app.db import engine
+from app.simulation.access import worker_scope
 
 MAX_MODEL_TICKETS = 24
 MAX_RECORDS_PER_TICKET = 18
@@ -62,9 +65,10 @@ class Draft(StrictInput):
     possible_related_groups: list[Group] = Field(max_length=4)
 
 
-def source_records(item: dict) -> list[dict]:
+def source_records(item: dict, run_id: UUID | None = None) -> list[dict]:
+    prefix = f"/api/v1/simulation-runs/{run_id}" if run_id else ""
     direct = {"ticket_id": item["id"], "number": item["number"], "ticket_version": item["version"],
-              "source_url": f"/tickets/{item['id']}"}
+              "source_url": f"{prefix}/tickets/{item['id']}"}
     records = []
 
     def add(kind: str, text: str | None, **context):
@@ -97,14 +101,14 @@ def source_records(item: dict) -> list[dict]:
 
 
 class HandoverTools:
-    def __init__(self, shift_id: UUID, items: list[dict], user_id: UUID):
+    def __init__(self, shift_id: UUID, items: list[dict], user_id: UUID, run_id: UUID | None = None):
         self.shift_id = shift_id
-        self.search = Toolbox(user_id, None)
+        self.search = Toolbox(user_id, None, run_id=run_id)
         self.records = {}
         self.index = []
         self.truncated = len(items) > MAX_MODEL_TICKETS
         for item in items[:MAX_MODEL_TICKETS]:
-            records = source_records(item)
+            records = source_records(item, run_id)
             self.truncated |= len(records) > MAX_RECORDS_PER_TICKET or len(item["history"]) > 5
             self.index.append({"id": item["id"], "number": item["number"], "title": clean_text(item["title"], 160),
                                "severity": item["severity"], "status": item["status"]})
@@ -119,6 +123,12 @@ class HandoverTools:
         return self.search.embedding_requests
 
     async def execute(self, name: str, raw: object) -> ToolOutcome:
+        if self.search.run_id is not None:
+            try:
+                with Session(engine()) as db:
+                    worker_scope(db, self.search.user_id, self.search.run_id)
+            except PermissionError:
+                return rejection("TOOL_UNAUTHORIZED")
         if name in SEARCH_TOOLS:
             return await self.search.execute(name, raw)
         if name not in HANDOVER_TOOLS:
@@ -169,12 +179,12 @@ def render_draft(raw: str, evidence: dict, truncated: bool) -> dict:
     }
 
 
-async def draft_handover(*, shift_id, items, user_id, model, usage, seconds, trace) -> dict:
+async def draft_handover(*, shift_id, items, user_id, model, usage, seconds, trace, run_id=None) -> dict:
     empty = Draft(highlights=[], completed_work=[], followups=[], warnings=[], needs_review=[], references=[],
                   possible_related_groups=[])
     if not items:
         return render_draft(empty.model_dump_json(), {}, False)
-    toolbox = HandoverTools(shift_id, items, user_id)
+    toolbox = HandoverTools(shift_id, items, user_id, run_id)
     budget = Budget(time.monotonic() + seconds, usage)
     request = {"purpose": "handover", "shift_id": str(shift_id), "ticket_index": toolbox.index}
     try:

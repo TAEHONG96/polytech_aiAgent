@@ -1,9 +1,10 @@
 from datetime import datetime
 from uuid import UUID, uuid4
 
+from pgvector.sqlalchemy import VECTOR
 from sqlalchemy import (
     CheckConstraint, DateTime, ForeignKey, ForeignKeyConstraint, Index, SmallInteger,
-    String, UniqueConstraint, text,
+    String, Text, UniqueConstraint, false, text,
 )
 from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.orm import Mapped, mapped_column
@@ -124,3 +125,63 @@ class SimulationRunHost(Base):
     scenario_host_id: Mapped[UUID] = mapped_column(primary_key=True)
     scenario_id: Mapped[UUID]
     state: Mapped[dict] = mapped_column(JSONB)
+
+
+class ScenarioIncident(Base):
+    __tablename__ = "scenario_incidents"
+    __table_args__ = (
+        ForeignKeyConstraint(["scenario_id", "scenario_host_id"], ["scenario_hosts.scenario_id", "scenario_hosts.id"],
+                             name="fk_scenario_incidents_host"),
+        CheckConstraint("(embedding IS NULL) = (embedding_profile IS NULL)", name="ck_scenario_incidents_embedding"),
+    )
+    id: Mapped[UUID] = mapped_column(primary_key=True, default=uuid4)
+    scenario_id: Mapped[UUID]
+    scenario_host_id: Mapped[UUID]
+    occurred_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
+    title: Mapped[str] = mapped_column(String(160))
+    resolution: Mapped[str] = mapped_column(Text)
+    approved: Mapped[bool] = mapped_column(server_default=false())
+    embedding: Mapped[list[float] | None] = mapped_column(VECTOR(768))
+    embedding_profile: Mapped[str | None] = mapped_column(String(160))
+
+
+class SimulationEvaluation(Base):
+    __tablename__ = "simulation_evaluations"
+    __table_args__ = (
+        ForeignKeyConstraint(["handover_id", "handover_revision"],
+                             ["handover_revisions.handover_id", "handover_revisions.version"],
+                             name="fk_sim_evaluation_revision"),
+        CheckConstraint("rules_status IN ('PENDING','PROCESSING','READY','FAILED')", name="ck_sim_evaluation_rules"),
+        CheckConstraint("explanation_status IN ('NOT_STARTED','PENDING','PROCESSING','READY','FAILED')",
+                        name="ck_sim_evaluation_explanation"),
+    )
+    id: Mapped[UUID] = mapped_column(primary_key=True, default=uuid4)
+    simulation_run_id: Mapped[UUID] = mapped_column(ForeignKey("simulation_runs.id"), unique=True)
+    handover_id: Mapped[UUID]
+    handover_revision: Mapped[int]
+    rule_version: Mapped[str] = mapped_column(String(64))
+    input_snapshot: Mapped[dict] = mapped_column(JSONB)
+    rules_status: Mapped[str] = mapped_column(String(12))
+    explanation_status: Mapped[str] = mapped_column(String(12))
+    rule_summary: Mapped[dict | None] = mapped_column(JSONB)
+    natural_language_summary: Mapped[dict | None] = mapped_column(JSONB)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
+
+
+class SimulationTicketEvaluation(Base):
+    __tablename__ = "simulation_ticket_evaluations"
+    __table_args__ = (
+        UniqueConstraint("evaluation_id", "ticket_id", name="uq_sim_evaluation_ticket"),
+        CheckConstraint("activity_status IN ('ATTEMPTED','NOT_ATTEMPTED')", name="ck_sim_evaluation_activity"),
+        CheckConstraint("final_status IN ('open','in_progress','waiting','resolved','closed')",
+                        name="ck_sim_evaluation_final_status"),
+    )
+    id: Mapped[UUID] = mapped_column(primary_key=True, default=uuid4)
+    evaluation_id: Mapped[UUID] = mapped_column(ForeignKey("simulation_evaluations.id"))
+    ticket_id: Mapped[UUID] = mapped_column(ForeignKey("tickets.id"))
+    activity_status: Mapped[str] = mapped_column(String(14))
+    final_status: Mapped[str] = mapped_column(String(20))
+    rule_results: Mapped[list | None] = mapped_column(JSONB)
+    evidence: Mapped[list | None] = mapped_column(JSONB)
+    explanation: Mapped[dict | None] = mapped_column(JSONB)

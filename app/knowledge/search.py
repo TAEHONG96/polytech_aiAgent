@@ -5,7 +5,7 @@ from threading import Lock
 from uuid import UUID
 
 import httpx2
-from sqlalchemy import func, or_, select
+from sqlalchemy import func, literal, or_, select, union_all
 from sqlalchemy.orm import Session
 
 from app.http import ApiError
@@ -13,6 +13,7 @@ from app.knowledge.embedding import GEMINI_SEARCH_PROFILE, EmbeddingFailure, che
 from app.knowledge.indexing import RESOLVED_STATUSES
 from app.knowledge.models import IndexJob, IndexStatus, KnowledgeChunk, SopDocument, SourceType
 from app.models import Ticket
+from app.simulation.models import ScenarioIncident
 
 
 _worker_client_lock = Lock()
@@ -71,10 +72,24 @@ def calibrated_min_score(profile: str) -> float | None:
     return 0.62 if profile == GEMINI_SEARCH_PROFILE else None
 
 
+def incident_scope(ticket: Ticket):
+    return (ScenarioIncident.scenario_id == ticket.scenario_id, ScenarioIncident.approved.is_(True),
+            ScenarioIncident.occurred_at < ticket.detected_at)
+
+
 def search_index(
     db: Session, *, vector: list[float], profile: str, source_types: list[SourceType], limit: int,
-    min_score: float | None = None,
+    min_score: float | None = None, run_id: UUID | None = None, target: Ticket | None = None,
+    exclude_ticket_id: UUID | None = None,
 ) -> list[SearchResult]:
+    if target is not None and (run_id is None or target.simulation_run_id != run_id):
+        raise ValueError("Search target must belong to the scoped run")
+    approved_sop = SopDocument.id.is_not(None)
+    if run_id is not None:
+        approved_sop = approved_sop & SopDocument.training_approved.is_(True)
+    ticket_scope = Ticket.simulation_run_id == run_id
+    if exclude_ticket_id is not None:
+        ticket_scope = ticket_scope & (Ticket.id != exclude_ticket_id)
     distance = KnowledgeChunk.embedding.cosine_distance(vector)
     statement = (
         select(
@@ -93,28 +108,46 @@ def search_index(
             KnowledgeChunk.embedding_profile == profile,
             IndexJob.source_type.in_(source_types),
             or_(
-                SopDocument.id.is_not(None),
+                approved_sop,
                 (Ticket.version == IndexJob.ticket_version)
-                & Ticket.simulation_run_id.is_(None)
+                & ticket_scope
                 & Ticket.status.in_(RESOLVED_STATUSES)
                 & Ticket.archived_at.is_(None)
                 & Ticket.resolution.is_not(None),
             ),
         )
-        .subquery()
     )
+    if run_id is not None:
+        statement = statement.where(IndexJob.indexed_profile == profile)
+    if target is not None and SourceType.INCIDENT in source_types:
+        incidents = select(
+            literal(SourceType.INCIDENT.value), ScenarioIncident.id, ScenarioIncident.title, literal(None),
+            ScenarioIncident.resolution, literal(0), literal(None), literal(None), literal(None),
+            ScenarioIncident.embedding.cosine_distance(vector), literal(1),
+        ).where(*incident_scope(target), ScenarioIncident.embedding_profile == profile)
+        statement = union_all(statement, incidents)
+    statement = statement.subquery()
     results = []
     ranked_sources = select(statement).where(statement.c.source_rank == 1)
     if min_score is not None:
         ranked_sources = ranked_sources.where(statement.c.distance <= 1 - min_score)
     ranked_sources = ranked_sources.order_by(statement.c.distance, statement.c.source_id).limit(limit)
     for row in db.execute(ranked_sources):
-        is_sop = row.source_type == SourceType.SOP
+        kind = SourceType(row.source_type)
+        title = row.ticket_title if kind == SourceType.TICKET else row.sop_title
+        if run_id is None:
+            source_url = f"/{'knowledge' if kind == SourceType.SOP else 'tickets'}/{row.source_id}"
+        else:
+            prefix = f"/api/v1/simulation-runs/{run_id}"
+            if kind == SourceType.INCIDENT:
+                source_url = f"{prefix}/tickets/{target.id}/incident-sources/{row.source_id}"
+            else:
+                source_url = f"{prefix}/{'sops' if kind == SourceType.SOP else 'tickets'}/{row.source_id}"
         results.append(SearchResult(
-            source_type=SourceType(row.source_type), source_id=row.source_id,
-            title=row.sop_title if is_sop else row.ticket_title, content=row.content,
+            source_type=kind, source_id=row.source_id,
+            title=title, content=row.content,
             score=round(1 - float(row.distance), 6), chunk_index=row.chunk_index,
             page_number=row.page_number, section=row.section, ticket_version=row.ticket_version,
-            source_url=f"/{'knowledge' if is_sop else 'tickets'}/{row.source_id}",
+            source_url=source_url,
         ))
     return results

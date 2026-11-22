@@ -1,7 +1,7 @@
 from datetime import datetime
 from uuid import UUID, uuid4
 
-from sqlalchemy import CheckConstraint, DateTime, ForeignKey, ForeignKeyConstraint, Identity, Index, Integer, String, Text, UniqueConstraint
+from sqlalchemy import CheckConstraint, DateTime, ForeignKey, ForeignKeyConstraint, Identity, Index, Integer, String, Text, UniqueConstraint, text
 from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column
 
@@ -12,12 +12,14 @@ class Base(DeclarativeBase):
 
 class User(Base):
     __tablename__ = "users"
+    __table_args__ = (CheckConstraint("role IN ('operator', 'trainee')", name="ck_users_role"),)
 
     id: Mapped[UUID] = mapped_column(primary_key=True, default=uuid4)
     username: Mapped[str] = mapped_column(String(64), unique=True)
     display_name: Mapped[str] = mapped_column(String(100))
     password_hash: Mapped[str] = mapped_column(Text)
     is_active: Mapped[bool]
+    role: Mapped[str] = mapped_column(String(8), server_default=text("'operator'"))
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
 
 
@@ -49,7 +51,9 @@ class Ticket(Base):
             "(simulation_run_id IS NULL AND scenario_id IS NULL AND scenario_host_id IS NULL "
             "AND scenario_ticket_template_id IS NULL AND training_origin IS NULL) OR "
             "(simulation_run_id IS NOT NULL AND scenario_id IS NOT NULL AND scenario_host_id IS NOT NULL "
-            "AND scenario_ticket_template_id IS NOT NULL AND training_origin IS NOT NULL "
+            "AND ((scenario_ticket_template_id IS NOT NULL AND training_origin IN ('INITIAL', 'CARRYOVER')) "
+            "OR (scenario_ticket_template_id IS NULL AND training_origin = 'USER_CREATED')) "
+            "AND training_origin IS NOT NULL "
             "AND shift_instance_id IS NULL)",
             name="ck_tickets_simulation_seed",
         ),
@@ -95,7 +99,7 @@ class Ticket(Base):
     scenario_id: Mapped[UUID | None]
     scenario_host_id: Mapped[UUID | None]
     scenario_ticket_template_id: Mapped[UUID | None]
-    training_origin: Mapped[str | None] = mapped_column(String(10))
+    training_origin: Mapped[str | None] = mapped_column(String(12))
 
     @property
     def display_number(self) -> str:

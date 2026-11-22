@@ -14,7 +14,8 @@ from app.db import engine
 from app.knowledge.embedding import Embedder, EmbeddingFailure, get_embedder
 from app.knowledge.models import SourceType
 from app.knowledge.search import calibrated_min_score, search_index
-from app.models import Ticket, TicketEvent, User
+from app.models import Ticket, TicketEvent
+from app.simulation.access import worker_scope
 
 
 class SearchArgs(StrictInput):
@@ -63,15 +64,12 @@ def rejection(code: str, details: dict | None = None) -> ToolOutcome:
     return ToolOutcome("rejected", {"error": code}, {**(details or {}), "error_code": code})
 
 
-def require_active_user(db: Session, user_id: UUID) -> None:
-    if not db.scalar(select(User.id).where(User.id == user_id, User.is_active.is_(True))):
-        raise PermissionError("Operator inactive")
-
-
 class Toolbox:
-    def __init__(self, user_id: UUID, ticket_id: UUID | None, provider: Embedder | None = None):
+    def __init__(self, user_id: UUID, ticket_id: UUID | None, provider: Embedder | None = None,
+                 *, run_id: UUID | None = None):
         self.user_id = user_id
         self.ticket_id = ticket_id
+        self.run_id = run_id
         self.allowed_tickets = {ticket_id} if ticket_id is not None else set()
         self.provider = provider
         self.evidence: dict[str, Evidence] = {}
@@ -92,19 +90,21 @@ class Toolbox:
         return item
 
     def _ticket_source(self, kind: str, ticket: Ticket, content: str, version: int | None = None) -> Evidence:
+        prefix = f"/api/v1/simulation-runs/{self.run_id}" if self.run_id else ""
         return self._add_source(
             kind=kind, source_id=ticket.id, title=clean_text(ticket.title, 160), content=clean_text(content, 1200),
-            source_url=f"/tickets/{ticket.id}", ticket_version=ticket.version if version is None else version,
+            source_url=f"{prefix}/tickets/{ticket.id}", ticket_version=ticket.version if version is None else version,
         )
 
     def _read_tickets(self, name: str, args: TicketArgs | OpenArgs) -> list[Evidence]:
         with Session(engine()) as db:
             db.execute(text("SET LOCAL statement_timeout = '4s'"))
-            require_active_user(db, self.user_id)
+            worker_scope(db, self.user_id, self.run_id)
             if isinstance(args, OpenArgs):
                 filters = args.filters
                 stmt = select(Ticket).where(
-                    Ticket.simulation_run_id.is_(None), Ticket.archived_at.is_(None), Ticket.status.in_(("open", "in_progress", "waiting"))
+                    Ticket.simulation_run_id == self.run_id, Ticket.archived_at.is_(None),
+                    Ticket.status.in_(("open", "in_progress", "waiting")),
                 )
                 if filters.status is not None:
                     stmt = stmt.where(Ticket.status == filters.status)
@@ -117,7 +117,7 @@ class Toolbox:
                     for ticket in tickets
                 ]
 
-            ticket = db.scalar(select(Ticket).where(Ticket.id == args.ticket_id, Ticket.simulation_run_id.is_(None)))
+            ticket = db.scalar(select(Ticket).where(Ticket.id == args.ticket_id, Ticket.simulation_run_id == self.run_id))
             if ticket is None:
                 raise LookupError("Ticket missing")
             if name == "get_ticket_details":
@@ -160,7 +160,7 @@ class Toolbox:
 
     async def _search(self, name: str, args: SearchArgs) -> list[Evidence]:
         with Session(engine()) as db:
-            require_active_user(db, self.user_id)
+            worker_scope(db, self.user_id, self.run_id)
         provider = self.provider or get_embedder()
         self.provider = provider
         query = clean_text(args.query, 300).strip()
@@ -171,20 +171,29 @@ class Toolbox:
         category = SourceType.SOP if name == "search_sop" else SourceType.TICKET
         with Session(engine()) as db:
             db.execute(text("SET LOCAL statement_timeout = '4s'"))
-            require_active_user(db, self.user_id)
+            worker_scope(db, self.user_id, self.run_id)
+            target = None
+            if self.run_id is not None and self.ticket_id is not None:
+                target = db.scalar(select(Ticket).where(Ticket.id == self.ticket_id,
+                                                        Ticket.simulation_run_id == self.run_id))
+                if target is None:
+                    raise PermissionError("Invalid analysis ticket")
+            categories = [category]
+            if category == SourceType.TICKET and target is not None:
+                categories.append(SourceType.INCIDENT)
             results = search_index(
-                db, vector=self._vectors[qkey], profile=provider.profile.fingerprint, source_types=[category],
-                limit=min(20, args.limit + 1) if self.ticket_id and category == SourceType.TICKET else args.limit,
+                db, vector=self._vectors[qkey], profile=provider.profile.fingerprint, source_types=categories,
+                limit=args.limit, run_id=self.run_id, target=target,
+                exclude_ticket_id=self.ticket_id if category == SourceType.TICKET else None,
                 min_score=calibrated_min_score(provider.profile.fingerprint),
             )
         sources = []
         for result in results:
-            if category == SourceType.TICKET:
-                if result.source_id == self.ticket_id:
-                    continue
+            if result.source_type == SourceType.TICKET:
                 self.allowed_tickets.add(result.source_id)
             sources.append(self._add_source(
-                kind="SOP" if category == SourceType.SOP else "SIMILAR_TICKET",
+                kind={SourceType.SOP: "SOP", SourceType.TICKET: "SIMILAR_TICKET",
+                      SourceType.INCIDENT: "HISTORICAL_INCIDENT"}[result.source_type],
                 source_id=result.source_id, title=clean_text(result.title, 160), content=clean_text(result.content, 900),
                 source_url=result.source_url, score=result.score, chunk_index=result.chunk_index,
                 page_number=result.page_number, section=clean_text(result.section, 200) if result.section else None,

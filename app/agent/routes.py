@@ -35,9 +35,17 @@ def run_view(run: AgentRun, calls: list[AgentToolCall]) -> dict:
 def analyze(body: AnalyzeInput, response: Response, db: Database, user: WriteUser) -> dict:
     if body.ticket_id is not None:
         ticket_by_id(db, body.ticket_id)
-    user_id = user.id
+    run = queue_analysis(db, user.id, body.message, body.ticket_id)
+    response.headers["Location"] = f"/api/v1/agent/runs/{run.id}"
+    return run_view(run, [])
+
+
+def queue_analysis(db: Database, user_id: UUID, message: str, ticket_id: UUID | None,
+                   run_id: UUID | None = None, *, handover_id: UUID | None = None,
+                   handover_version: int | None = None) -> AgentRun:
     run = AgentRun(
-        requested_by=user_id, ticket_id=body.ticket_id, message=clean_text(body.message, MAX_MESSAGE),
+        requested_by=user_id, ticket_id=ticket_id, message=clean_text(message, MAX_MESSAGE),
+        simulation_run_id=run_id, handover_id=handover_id, handover_version=handover_version,
         status=RunStatus.QUEUED, created_at=utcnow(),
     )
     db.add(run)
@@ -45,21 +53,24 @@ def analyze(body: AnalyzeInput, response: Response, db: Database, user: WriteUse
         db.commit()
     except IntegrityError as exc:
         db.rollback()
-        if getattr(getattr(exc.orig, "diag", None), "constraint_name", None) != "uq_agent_runs_active_user":
+        if getattr(getattr(exc.orig, "diag", None), "constraint_name", None) not in (
+            "uq_agent_runs_active_user", "uq_agent_runs_active_handover",
+        ):
             raise
         active = db.scalar(select(AgentRun.id).where(
-            AgentRun.requested_by == user_id, AgentRun.status.in_(ACTIVE_RUNS)
+            AgentRun.requested_by == user_id, AgentRun.status.in_(ACTIVE_RUNS),
+            AgentRun.simulation_run_id == run_id,
         ))
         raise ApiError(409, "AGENT_BUSY", "진행 중인 분석을 먼저 확인하세요.",
                        {"run_id": str(active)} if active is not None else None) from exc
-    response.headers["Location"] = f"/api/v1/agent/runs/{run.id}"
-    return run_view(run, [])
+    return run
 
 
 @router.get("/runs/{run_id}")
 def read_run(run_id: UUID, db: Database, user: CurrentUser) -> dict:
     run = db.scalar(select(AgentRun).where(
         AgentRun.id == run_id, AgentRun.requested_by == user.id, AgentRun.handover_id.is_(None),
+        AgentRun.simulation_run_id.is_(None),
     ))
     if run is None:
         raise ApiError(404, "AGENT_RUN_NOT_FOUND", "분석 실행을 찾을 수 없습니다.")

@@ -28,6 +28,7 @@ class AgentRun(Base):
 
     id: Mapped[UUID] = mapped_column(primary_key=True, default=uuid4)
     requested_by: Mapped[UUID] = mapped_column(ForeignKey("users.id"))
+    simulation_run_id: Mapped[UUID | None] = mapped_column(ForeignKey("simulation_runs.id"))
     ticket_id: Mapped[UUID | None] = mapped_column(ForeignKey("tickets.id"))
     handover_id: Mapped[UUID | None]
     handover_version: Mapped[int | None]
