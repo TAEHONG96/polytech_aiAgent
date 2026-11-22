@@ -194,17 +194,15 @@ def ensure_editable(ticket: Ticket, expected_version: int) -> None:
     check_version(ticket, expected_version)
 
 
-def record_event(db: Session, ticket: Ticket, actor_id: UUID, event_type: str, details: dict) -> None:
-    db.add(
-        TicketEvent(
-            ticket_id=ticket.id,
-            ticket_version=ticket.version,
-            actor_id=actor_id,
-            event_type=event_type,
-            details=jsonable_encoder(details),
-            created_at=ticket.updated_at,
-        )
+def record_event(db: Session, ticket: Ticket, actor_id: UUID, event_type: str, details: dict, *,
+                 action_request_key: str | None = None, action_request_digest: str | None = None) -> TicketEvent:
+    event = TicketEvent(
+        ticket_id=ticket.id, ticket_version=ticket.version, actor_id=actor_id, event_type=event_type,
+        details=jsonable_encoder(details), created_at=ticket.updated_at,
+        action_request_key=action_request_key, action_request_digest=action_request_digest,
     )
+    db.add(event)
+    return event
 
 
 def apply_changes(
@@ -325,6 +323,8 @@ def edit_ticket(db: Session, user: User, ticket_id: UUID, body: TicketUpdate, ru
     ticket = ticket_by_id(db, ticket_id, lock=True, run_id=run_id)
     ensure_editable(ticket, body.expected_version)
     fields = body.model_dump(exclude_unset=True, exclude={"expected_version"})
+    if run_id is not None and "detected_at" in fields and fields["detected_at"] != ticket.detected_at:
+        raise ApiError(422, "FIXED_TICKET_TIME", "실습 티켓의 발생 시각은 변경할 수 없습니다.")
     apply_changes(db, ticket, user.id, "updated", fields)
     return ticket
 

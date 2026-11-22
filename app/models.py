@@ -1,7 +1,7 @@
 from datetime import datetime
 from uuid import UUID, uuid4
 
-from sqlalchemy import CheckConstraint, DateTime, ForeignKey, ForeignKeyConstraint, Identity, Index, Integer, String, Text, UniqueConstraint, text
+from sqlalchemy import BigInteger, CheckConstraint, DateTime, ForeignKey, ForeignKeyConstraint, Identity, Index, Integer, String, Text, UniqueConstraint, text
 from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column
 
@@ -70,6 +70,7 @@ class Ticket(Base):
             name="fk_tickets_scenario_template",
         ),
         UniqueConstraint("simulation_run_id", "scenario_ticket_template_id", name="uq_tickets_run_template"),
+        UniqueConstraint("simulation_run_id", "id", name="uq_tickets_run_id"),
     )
 
     id: Mapped[UUID] = mapped_column(primary_key=True, default=uuid4)
@@ -117,10 +118,28 @@ Index(
 
 class TicketEvent(Base):
     __tablename__ = "ticket_events"
-    __table_args__ = (UniqueConstraint("ticket_id", "ticket_version", name="uq_ticket_events_version"),)
+    __table_args__ = (
+        UniqueConstraint("ticket_id", "ticket_version", name="uq_ticket_events_version"),
+        UniqueConstraint("simulation_run_id", "event_sequence", name="uq_training_event_sequence"),
+        UniqueConstraint("simulation_run_id", "action_request_key", name="uq_training_action_request"),
+        ForeignKeyConstraint(["simulation_run_id", "ticket_id"], ["tickets.simulation_run_id", "tickets.id"],
+                             name="fk_training_event_ticket"),
+        CheckConstraint("(simulation_run_id IS NULL) = (event_sequence IS NULL)", name="ck_training_event_scope"),
+        CheckConstraint(
+            "(action_request_key IS NULL AND action_request_digest IS NULL "
+            "AND event_type NOT IN ('virtual_action_performed', 'training_note')) OR "
+            "(action_request_key IS NOT NULL AND action_request_digest IS NOT NULL AND simulation_run_id IS NOT NULL "
+            "AND event_type IN ('virtual_action_performed', 'training_note'))",
+            name="ck_training_action_request",
+        ),
+    )
 
     id: Mapped[UUID] = mapped_column(primary_key=True, default=uuid4)
     ticket_id: Mapped[UUID] = mapped_column(ForeignKey("tickets.id"))
+    simulation_run_id: Mapped[UUID | None]
+    event_sequence: Mapped[int | None] = mapped_column(BigInteger)
+    action_request_key: Mapped[str | None] = mapped_column(String(128))
+    action_request_digest: Mapped[str | None] = mapped_column(String(64))
     actor_id: Mapped[UUID] = mapped_column(ForeignKey("users.id"))
     ticket_version: Mapped[int]
     event_type: Mapped[str] = mapped_column(String(32))

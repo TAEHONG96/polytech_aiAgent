@@ -3,7 +3,7 @@ from uuid import UUID, uuid4
 
 from pgvector.sqlalchemy import VECTOR
 from sqlalchemy import (
-    CheckConstraint, DateTime, ForeignKey, ForeignKeyConstraint, Index, SmallInteger,
+    BigInteger, CheckConstraint, DateTime, ForeignKey, ForeignKeyConstraint, Index, SmallInteger,
     String, Text, UniqueConstraint, false, text,
 )
 from sqlalchemy.dialects.postgresql import JSONB
@@ -105,6 +105,7 @@ class SimulationRun(Base):
     completed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     incoming_report_snapshot: Mapped[dict] = mapped_column(JSONB)
     start_request_key: Mapped[str] = mapped_column(String(128))
+    last_event_sequence: Mapped[int] = mapped_column(BigInteger, server_default=text("0"))
 
 
 class SimulationRunHost(Base):
@@ -133,12 +134,15 @@ class ScenarioIncident(Base):
         ForeignKeyConstraint(["scenario_id", "scenario_host_id"], ["scenario_hosts.scenario_id", "scenario_hosts.id"],
                              name="fk_scenario_incidents_host"),
         CheckConstraint("(embedding IS NULL) = (embedding_profile IS NULL)", name="ck_scenario_incidents_embedding"),
+        UniqueConstraint("scenario_id", "incident_key", name="uq_scenario_incident_key"),
     )
     id: Mapped[UUID] = mapped_column(primary_key=True, default=uuid4)
     scenario_id: Mapped[UUID]
     scenario_host_id: Mapped[UUID]
     occurred_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
     title: Mapped[str] = mapped_column(String(160))
+    incident_key: Mapped[str | None] = mapped_column(String(64))
+    error_code: Mapped[str | None] = mapped_column(String(64))
     resolution: Mapped[str] = mapped_column(Text)
     approved: Mapped[bool] = mapped_column(server_default=false())
     embedding: Mapped[list[float] | None] = mapped_column(VECTOR(768))

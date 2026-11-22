@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from 'react'
-import { api, errorMessage, statuses } from './api'
-import type { Session, Ticket, TicketPage } from './api'
+import { api, errorMessage } from './api'
+import type { Session } from './api'
+import { TrainingWorkspace } from './training-workspace'
 
 interface Run {
   id: string
@@ -15,11 +16,14 @@ interface Summary {
 }
 
 export function TrainingPage({ path, session }: { path: string; session: Session }) {
-  const id = /^\/simulation-runs\/([0-9a-f-]{36})$/i.exec(path)?.[1]
+  const route = /^\/simulation-runs\/([0-9a-f-]{36})(?:\/tickets\/([0-9a-f-]{36}))?$/i.exec(path)
+  return route ? <TrainingWorkspace runId={route[1]} ticketId={route[2]} session={session} />
+    : <TrainingHome session={session} />
+}
+
+function TrainingHome({ session }: { session: Session }) {
   const [summary, setSummary] = useState<Summary>()
   const [history, setHistory] = useState<Run[]>([])
-  const [run, setRun] = useState<Run>()
-  const [tickets, setTickets] = useState<Ticket[]>([])
   const [error, setError] = useState('')
   const [pending, setPending] = useState(false)
   const startRequest = useRef<{ scenario: string; key: string } | null>(null)
@@ -28,23 +32,17 @@ export function TrainingPage({ path, session }: { path: string; session: Session
     let live = true
     async function load() {
       try {
-        if (id) {
-          const ownRun = await api<Run>(`/simulation-runs/${id}`)
-          const page = await api<TicketPage>(`/simulation-runs/${id}/tickets`)
-          if (live) { setRun(ownRun); setTickets(page.items) }
-        } else {
-          const [home, runs] = await Promise.all([
-            api<Summary>('/simulation'), api<{ items: Run[] }>('/simulation-runs'),
-          ])
-          if (live) { setSummary(home); setHistory(runs.items) }
-        }
+        const [home, runs] = await Promise.all([
+          api<Summary>('/simulation'), api<{ items: Run[] }>('/simulation-runs'),
+        ])
+        if (live) { setSummary(home); setHistory(runs.items) }
       } catch (failure) {
         if (live) setError(errorMessage(failure))
       }
     }
     void load()
     return () => { live = false }
-  }, [id])
+  }, [])
 
   async function start(scenario: Summary['available_scenarios'][number]) {
     const selection = JSON.stringify(scenario)
@@ -68,14 +66,9 @@ export function TrainingPage({ path, session }: { path: string; session: Session
 
   return (
     <section>
-      <h1>{run ? `${run.scenario.key} v${run.scenario.version}` : '내 실습'}</h1>
+      <h1>내 실습</h1>
       {error && <p role="alert">{error}</p>}
-      {!error && !run && !summary && <p role="status">실습을 불러오는 중입니다.</p>}
-      {run && <>
-        <p>{run.status === 'ACTIVE' ? '진행 중' : '완료'} · {new Date(run.virtual_now).toLocaleString('ko-KR', { timeZone: 'Asia/Seoul' })}</p>
-        <h2>실습 티켓</h2>
-        <ul>{tickets.map(ticket => <li key={ticket.id}>{ticket.title} · {statuses[ticket.status]}</li>)}</ul>
-      </>}
+      {!error && !summary && <p role="status">실습을 불러오는 중입니다.</p>}
       {summary && <>
         {summary.active_run_id
           ? <a href={`/simulation-runs/${summary.active_run_id}`}>진행 중인 실습 계속하기</a>

@@ -34,7 +34,7 @@ interface Trace {
   elapsed_ms: number
   details: Record<string, unknown>
 }
-interface Run {
+export interface Run {
   run_id: string
   status: RunState
   message: string
@@ -52,6 +52,7 @@ const statusText: Record<RunState, string> = { queued: '대기 중', running: '�
 const evidenceLabel: Record<string, string> = {
   SOP: 'SOP', SIMILAR_TICKET: '과거 해결 티켓', TICKET_DETAILS: '티켓 상세',
   TICKET_HISTORY: '티켓 이력', OPEN_TICKET: '미해결 티켓',
+  HISTORICAL_INCIDENT: '승인된 합성 과거 사고',
 }
 const isActive = (state?: RunState) => state === 'queued' || state === 'running'
 
@@ -73,7 +74,7 @@ function Statements({ title, items }: { title: string; items: Statement[] }) {
   </section>
 }
 
-function ReportView({ report }: { report: Report }) {
+export function ReportView({ report }: { report: Report }) {
   return <>
     <section className="surface">
       <h2>분석 요약</h2><p>{report.summary}</p>

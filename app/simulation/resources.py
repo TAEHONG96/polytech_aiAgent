@@ -19,7 +19,7 @@ from app.knowledge.routes import SearchRequest, SearchResponse, SopDetail, SopPa
 from app.knowledge.search import incident_scope
 from app.models import Ticket
 from app.simulation.access import OwnedRun, WritableRun
-from app.simulation.models import ScenarioIncident
+from app.simulation.models import ScenarioHost, ScenarioIncident
 from app.tickets import ticket_by_id
 
 router = APIRouter(prefix="/simulation-runs/{run_id}", tags=["training resources"])
@@ -57,11 +57,6 @@ def update_training_work(ticket_id: UUID, work_id: UUID, body: WorkInput, db: Da
     return save_work(db, user, ticket_id, body, work_id, run_id=run.id)
 
 
-@router.get("/tickets/{ticket_id}/actions")
-def actions(ticket_id: UUID, db: Database, run: OwnedRun) -> dict:
-    return {"items": read_work(ticket_id, db, run)["work"]}
-
-
 @router.get("/sops")
 def training_sops(db: Database, run: OwnedRun, limit: Annotated[int, Query(ge=1, le=100)] = 25,
                   cursor: UUID | None = None) -> SopPage:
@@ -87,17 +82,22 @@ def training_search(body: TrainingSearchRequest, db: Database, run: OwnedRun, us
 
 def incident_view(incident: ScenarioIncident) -> dict:
     return {"id": incident.id, "occurred_at": incident.occurred_at, "title": incident.title,
-            "resolution": incident.resolution}
+            "incident_id": incident.id, "incident_key": incident.incident_key, "error_code": incident.error_code,
+            "source_type": "synthetic", "summary": incident.title, "resolution": incident.resolution}
 
 
 @router.get("/tickets/{ticket_id}/host-incidents")
-def host_incidents(ticket_id: UUID, db: Database, run: OwnedRun) -> dict:
+def host_incidents(ticket_id: UUID, db: Database, run: OwnedRun,
+                   limit: Annotated[int, Query(ge=1, le=100)] = 20) -> dict:
     ticket = ticket_by_id(db, ticket_id, run_id=run.id)
+    host = db.get(ScenarioHost, ticket.scenario_host_id) if ticket.scenario_host_id else None
     incidents = db.scalars(select(ScenarioIncident).where(
         *incident_scope(ticket), ScenarioIncident.scenario_host_id == ticket.scenario_host_id,
-    ).order_by(ScenarioIncident.occurred_at.desc(), ScenarioIncident.id))
+    ).order_by(ScenarioIncident.occurred_at.desc(), ScenarioIncident.id).limit(limit))
     prefix = f"/api/v1/simulation-runs/{run.id}/tickets/{ticket.id}/incident-sources"
-    return {"items": [{**incident_view(incident), "source_url": f"{prefix}/{incident.id}"} for incident in incidents]}
+    items = [{**incident_view(incident), "source_url": f"{prefix}/{incident.id}"} for incident in incidents]
+    return {"host": {"id": host.id, "host_key": host.host_key, "hostname": host.hostname} if host else None,
+            "incidents": items, "items": items}
 
 
 @router.get("/tickets/{ticket_id}/incident-sources/{incident_id}")

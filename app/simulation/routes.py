@@ -104,7 +104,7 @@ def clone_seed(db: Database, run: SimulationRun, scenario: Scenario) -> None:
 def summary(db: Database, user: CurrentUser) -> dict:
     run = active_run(db, user.id)
     scenarios = db.scalars(select(Scenario).where(Scenario.is_published.is_(True)).order_by(
-        Scenario.scenario_key, Scenario.version,
+        Scenario.scenario_key, Scenario.version.desc(),
     ))
     return {
         "status": "ACTIVE" if run else "NOT_STARTED",

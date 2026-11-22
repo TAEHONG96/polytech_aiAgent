@@ -156,6 +156,13 @@ class Toolbox:
             parts.append(f"상태: {transition.get('before')} → {transition.get('after')}")
         if reason := details.get("reason"):
             parts.append(f"기록된 사유: {reason}")
+        if event.event_type == "virtual_action_performed":
+            result = details["result"]
+            parts.append(f"수행된 가상 조치: {details['action_code']} · {result['message']}")
+            if result.get("error_code"):
+                parts.append(f"가상 오류 코드: {result['error_code']}")
+        elif event.event_type == "training_note":
+            parts.append(f"교육생 자유 메모: {details['note']}")
         return "\n".join(parts)
 
     async def _search(self, name: str, args: SearchArgs) -> list[Evidence]:

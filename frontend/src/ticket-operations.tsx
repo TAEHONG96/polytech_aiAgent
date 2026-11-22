@@ -22,8 +22,8 @@ const koreanInputDate = new Intl.DateTimeFormat('sv-SE', {
 })
 const nullable = (form: FormData, name: string) => String(form.get(name) ?? '').trim() || null
 
-export function TicketOperations({ ticket, session, onVersion }: {
-  ticket: Ticket; session: Session; onVersion: (version: number) => void
+export function TicketOperations({ ticket, session, onVersion, trainingPath = '', readOnly = false }: {
+  ticket: Ticket; session: Session; onVersion: (version: number) => void; trainingPath?: string; readOnly?: boolean
 }) {
   const [data, setData] = useState<Operations>()
   const [roster, setRoster] = useState<Operator[]>([])
@@ -33,15 +33,17 @@ export function TicketOperations({ ticket, session, onVersion }: {
   const [editing, setEditing] = useState<Work | 'new' | null>(null)
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState('')
-  const path = '/tickets/' + ticket.id
+  const path = trainingPath + '/tickets/' + ticket.id
   const team = shifts.find(shift => shift.id === shiftId)?.team_id
+  const locked = readOnly || !!ticket.archived_at
 
   useEffect(() => {
     let cancelled = false
     Promise.all([
       api<Operations>(path + '/operations'),
-      api<{ items: Shift[] }>('/shift-instances'),
-      api<{ items: Operator[] }>('/handover-operators'),
+      trainingPath ? { items: [] } : api<{ items: Shift[] }>('/shift-instances'),
+      trainingPath ? { items: [{ id: session.user.id, name: session.user.display_name, team_ids: [] }] }
+        : api<{ items: Operator[] }>('/handover-operators'),
     ]).then(([operations, shifts, roster]) => {
       if (!cancelled) {
         setData(operations)
@@ -52,7 +54,7 @@ export function TicketOperations({ ticket, session, onVersion }: {
       }
     }).catch(failure => { if (!cancelled) setError(errorMessage(failure)) })
     return () => { cancelled = true }
-  }, [path, ticket.version])
+  }, [path, ticket.version, trainingPath, session.user.id, session.user.display_name])
 
   async function save(endpoint: string, method: string, payload: object) {
     if (!data) return
@@ -97,23 +99,23 @@ export function TicketOperations({ ticket, session, onVersion }: {
     {!data && !error && <p role="status">업무 정보를 불러오는 중입니다.</p>}
     {error && <button className="secondary" onClick={() => window.location.reload()}>최신 티켓 불러오기</button>}
     {data && <>
-      {ticket.archived_at ? <dl className="details">
+      {locked ? <dl className="details">
         <div><dt>담당 근무 회차</dt><dd>{shifts.find(shift => shift.id === data.shift_instance_id)?.team_name || '미배정'}</dd></div>
         <div><dt>담당자</dt><dd>{roster.find(user => user.id === data.owner_id)?.name || '미지정'}</dd></div>
         <div><dt>주의사항</dt><dd>{data.warnings || '미기록'}</dd></div>
         <div><dt>추가 승인</dt><dd>{data.approval_required === null ? '미확인' : data.approval_required ? '필요' : '해당 없음'}</dd></div>
       </dl> : <form onSubmit={saveOperations} key={data.version}>
         <div className="fields">
-          <label>담당 근무 회차<select value={shiftId} onChange={event => { setShiftId(event.target.value); setOwnerId('') }}>
+          {!trainingPath && <label>담당 근무 회차<select value={shiftId} onChange={event => { setShiftId(event.target.value); setOwnerId('') }}>
             <option value="">미배정</option>
             {shiftId && !shifts.some(shift => shift.id === shiftId) && <option value={shiftId}>기존 담당 회차</option>}
             {shifts.map(shift => <option key={shift.id} value={shift.id}>{shiftLabel(shift)}</option>)}
-          </select></label>
+          </select></label>}
           <label>담당자<select value={ownerId} onChange={event => setOwnerId(event.target.value)}>
             <option value="">미지정</option>
-            {ownerId && !roster.some(user => user.id === ownerId && team && user.team_ids.includes(team)) &&
+            {ownerId && !roster.some(user => user.id === ownerId && (trainingPath || team && user.team_ids.includes(team))) &&
               <option value={ownerId}>기존 담당자</option>}
-            {roster.filter(user => team && user.team_ids.includes(team)).map(user => <option key={user.id} value={user.id}>{user.name}</option>)}
+            {roster.filter(user => trainingPath || team && user.team_ids.includes(team)).map(user => <option key={user.id} value={user.id}>{user.name}</option>)}
           </select></label>
           <label className="full">주의사항<textarea name="warnings" maxLength={4000} rows={2} defaultValue={data.warnings || ''} /></label>
           <label>추가 승인<select name="approval_required" defaultValue={data.approval_required === null ? '' : String(data.approval_required)}>
@@ -129,12 +131,12 @@ export function TicketOperations({ ticket, session, onVersion }: {
           <div className="row"><strong>{work.title}</strong><span>{workStatuses[work.status]}</span>
             <span>{roster.find(user => user.id === work.owner_id)?.name || '담당 미지정'}</span>
             {work.due_at && <span>{displayDate(work.due_at)} KST</span>}
-            {!ticket.archived_at && <button className="secondary" disabled={busy} onClick={() => setEditing(work)}>작업 수정</button>}
+            {!locked && <button className="secondary" disabled={busy} onClick={() => setEditing(work)}>작업 수정</button>}
           </div>
           {work.note && <p className="knowledge-text">{work.note}</p>}
         </li>)}</ul>
-        {!ticket.archived_at && !editing && <button className="secondary" disabled={busy} onClick={() => setEditing('new')}>후속 작업 추가</button>}
-        {editing && <form className="handover-actions" onSubmit={saveTask} key={task?.id || 'new'}>
+        {!locked && !editing && <button className="secondary" disabled={busy} onClick={() => setEditing('new')}>후속 작업 추가</button>}
+        {!locked && editing && <form className="handover-actions" onSubmit={saveTask} key={task?.id || 'new'}>
           <div className="fields">
             <label>작업명<input name="title" maxLength={160} defaultValue={task?.title} required /></label>
             <label>작업 상태<select name="status" defaultValue={task?.status || (ticket.status === 'closed' ? 'done' : 'todo')}>

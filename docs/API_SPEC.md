@@ -245,6 +245,10 @@ Phase 1 시작 요청의 `Idempotency-Key`는 필수이며 공백 없이 1~128�
 - `CUSTOM_NOTE`처럼 자유 기록은 실제 조치·상태 전이를 자동 생성하지 않는다.
 - 실제 인프라 제어 금지. 반복 호출 시 멱등성/버전 충돌 검증.
 
+Phase 3에서는 `Idempotency-Key`가 필수다. 키의 범위는 실행이며 티켓과 본문을 변경해 재사용하면 409다. 같은 요청의 재전송은 최초 저장 응답을 200으로 반환한다. `expected_version`을 제공하면 현재 티켓 버전을 대조한다. 조치의 매개변수는 카탈로그와 일치해야 하며 선행 조건 미충족은 409다. `CUSTOM_NOTE`는 비어 있지 않은 메모만 받아 `kind: NOTE`, `status: RECORDED`, `result: null`로 반환한다. 수행한 가상 조치는 `kind: ACTION`이며 별도 결과를 저장한다. 자동 티켓 상태 전이는 없다.
+
+같은 경로의 GET 응답은 기존 작업 목록 `items`와 시나리오 카탈로그 `catalog`, 조치·자유 메모의 저장 영수증 `activity`를 반환한다. `GET /simulation-runs/{run_id}/events?after_sequence=0&limit=50`은 실행 내 티켓 감사 이력을 순번 오름차순으로 반환한다. 현재 단계에서 인계 열람과 검색은 상태를 바꾸지 않는다.
+
 ### 4.7 인수 보고서 확인(선택적 기록)
 
 `POST /api/v1/simulation-runs/{run_id}/incoming-handover/ack`

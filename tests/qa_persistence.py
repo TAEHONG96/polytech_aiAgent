@@ -18,7 +18,7 @@ TABLES = (
     "alembic_version", "tickets", "ticket_events", "ticket_work", "handovers", "handover_items",
     "handover_revisions", "sop_documents", "index_jobs", "knowledge_chunks", "agent_runs", "agent_tool_calls",
     "simulation_scenarios", "scenario_shift_slots", "scenario_hosts", "scenario_ticket_templates",
-    "simulation_runs", "simulation_run_hosts",
+    "simulation_runs", "simulation_run_hosts", "scenario_incidents",
 )
 
 
