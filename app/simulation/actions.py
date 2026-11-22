@@ -15,7 +15,8 @@ from app.http import ApiError
 from app.knowledge.indexing import sync_ticket_index
 from app.models import Ticket, TicketEvent
 from app.simulation.access import OwnedRun, WritableRun
-from app.simulation.models import Scenario, SimulationRunHost
+from app.simulation.learning import learning_source
+from app.simulation.models import LearningEvent, Scenario, SimulationRunHost
 from app.simulation.routes import StartKey
 from app.tickets import Note, Version, ensure_editable, record_event, ticket_by_id
 
@@ -132,9 +133,18 @@ def timeline(db: Database, run: OwnedRun, after_sequence: Annotated[int, Query(g
     events = list(db.scalars(select(TicketEvent).where(
         TicketEvent.simulation_run_id == run.id, TicketEvent.event_sequence > after_sequence,
     ).order_by(TicketEvent.event_sequence).limit(limit + 1)))
-    return {
-        "items": [{"id": event.id, "ticket_id": event.ticket_id, "event_type": event.event_type,
-                   "event_sequence": event.event_sequence, "occurred_at": event.created_at, "actor_id": event.actor_id,
-                   "payload": event.details} for event in events[:limit]],
-        "next_after_sequence": events[limit - 1].event_sequence if len(events) > limit else None,
-    }
+    page = [{"id": event.id, "ticket_id": event.ticket_id, "event_type": event.event_type,
+             "event_sequence": event.event_sequence, "occurred_at": event.created_at, "actor_id": event.actor_id,
+             "payload": event.details} for event in events]
+    learning = db.execute(select(LearningEvent, Ticket).join(Ticket, Ticket.id == LearningEvent.ticket_id).where(
+        LearningEvent.simulation_run_id == run.id, Ticket.simulation_run_id == run.id,
+        LearningEvent.event_sequence > after_sequence,
+    ).order_by(LearningEvent.event_sequence).limit(limit + 1)).all()
+    page += [{"id": item.id, "ticket_id": item.ticket_id, "event_type": "learning_evidence",
+              "event_sequence": item.event_sequence, "occurred_at": item.occurred_at, "actor_id": item.actor_id,
+              "payload": {"kind": item.kind, "activity": item.activity, "source_id": item.source_id}
+              if learning_source(db, ticket, item.kind, item.source_id) else None}
+             for item, ticket in learning]
+    page.sort(key=lambda item: item["event_sequence"])
+    return {"items": [item for item in page[:limit] if item["payload"] is not None],
+            "next_after_sequence": page[limit - 1]["event_sequence"] if len(page) > limit else None}

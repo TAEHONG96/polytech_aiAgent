@@ -32,8 +32,19 @@ def writable_run(run_id: UUID, db: Database, user: WriteUser) -> SimulationRun:
     return find_run(db, run_id, user.id, write=True)
 
 
+def finalizing_run(run_id: UUID, db: Database, user: WriteUser) -> SimulationRun:
+    # Identical replays also take this lock after completion.
+    run = db.scalar(select(SimulationRun).where(
+        SimulationRun.id == run_id, SimulationRun.user_id == user.id,
+    ).with_for_update())
+    if run is None:
+        raise ApiError(404, "SIMULATION_RUN_NOT_FOUND", "실습 실행을 찾을 수 없습니다.")
+    return run
+
+
 OwnedRun = Annotated[SimulationRun, Depends(owned_run)]
 WritableRun = Annotated[SimulationRun, Depends(writable_run)]
+FinalizingRun = Annotated[SimulationRun, Depends(finalizing_run)]
 
 
 def worker_scope(db: Session, user_id: UUID, run_id: UUID | None) -> None:

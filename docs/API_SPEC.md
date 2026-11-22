@@ -104,6 +104,7 @@
 | GET | `/simulation-runs/{run_id}/evaluation` | 규칙·설명 상태, 평가 대상 기준 종합 요약 | COMPLETED |
 | GET | `/simulation-runs/{run_id}/evaluation/tickets` | 초기 실습·이월 티켓 평가 목록(무조치·보관 포함) | COMPLETED |
 | GET | `/simulation-runs/{run_id}/evaluation/tickets/{ticket_id}` | 티켓 상세 평가/증거 | COMPLETED |
+| POST | `/simulation-runs/{run_id}/tickets/{ticket_id}/learning-evidence` | 승인 학습 자료의 확인 또는 실제 조치에 연결된 활용을 기록 | ACTIVE, 소유자, CSRF |
 | GET | `/simulation-runs/{run_id}/events` | 평가 근거용 사용자 행동 타임라인 | 소유자 |
 
 **라우트 중복 최소화 권고:** 위 `simulation-runs/...` 경로는 목표로 하는 **외부 교육용 API 계약**이다. 구현 시 현재 ticket/agent/handover 서비스 함수를 호출할 것. 기존 코드 기능이 이미 만족한다면 새 비즈니스 로직을 별도로 구현하지 않는다.
@@ -302,6 +303,7 @@ Phase 3에서는 `Idempotency-Key`가 필수다. 키의 범위는 실행이며 �
 - **버전 충돌**은 409다. `expected_revision`과 현재 초안의 불일치 또는 재수집이 필요한 원본 버전 변경을 검증한다. 경고 변화만으로 충돌을 만들지 않는다. 확정 성공은 새 최종 리비전을 만든다. 예시의 `finalized_revision`은 `expected_revision`보다 증가한 값이다.
 - 빈 요약, 미해결 티켓의 인계 누락, 담당·다음 조치·재확인 미기록 등은 `warnings`로 반환한다. 확정본 조회에서 경고를 다시 읽을 수 있고, 상세 평가 대상에 해당하는 경고는 평가에 반영한다. 적절히 인계된 미해결 상태와 AI 초안의 처리 여부는 확정 조건에 영향을 주지 않는다.
 - 확정 리비전과 경고, 실행 `COMPLETED`, 고정 평가 입력과 규칙 예약을 한 DB 트랜잭션에 기록한다. 동일 범위·동일 키·동일 요청은 저장된 성공 응답을 반환하고 같은 키에 다른 내용을 사용하면 409를 반환한다. 별개 요청이 이미 확정된 이전 초안 리비전으로 들어오면 버전 충돌이다. 두 처리 단계는 커밋 이후에 진행한다.
+- `expected_revision: 0`은 초안이 없는 실행에서 허용한다. 서버가 초기 스냅샷과 확정 리비전을 같은 트랜잭션에서 저장한다. 재수집 시 모든 실행 티켓 버전을 저장한다. 버전 목록이 없는 Phase 3 초안은 포함된 스냅샷의 버전을 비교한다. 원본 버전 충돌은 `REPORT_SOURCE_CHANGED`, 보고서 리비전 충돌은 `VERSION_CONFLICT`, 동일 키의 다른 요청은 `IDEMPOTENCY_KEY_REUSED`다.
 
 ### 4.10 평가 상태/티켓별 피드백
 
@@ -343,6 +345,15 @@ Phase 3에서는 `Idempotency-Key`가 필수다. 키의 범위는 실행이며 �
 - 규칙 상태는 `PENDING | PROCESSING | READY | FAILED`다. 설명은 `NOT_STARTED`에서 시작하고 규칙 결과가 저장된 후 `PENDING | PROCESSING | READY | FAILED`를 표시한다. 조회는 두 상태를 함께 반환한다. 규칙이 `READY`가 되기 전에는 규칙 결과를 `null`로 반환하고, 설명이 `READY`가 되기 전에는 `feedback`을 `null`로 반환한다. 설명 실패 중에도 준비된 규칙 결과와 근거는 반환한다.
 - `INITIAL`·`CARRYOVER`는 무조치·인계 누락·보관 시에도 상세 평가 대상이다. 무조치는 `NOT_ATTEMPTED`로 표시한다. 사용자 생성 티켓은 작업·인계 기록을 보존하며 상세 평가 목록·집계에서 제외한다. 해당 사용자 생성 티켓의 상세 평가 조회는 `404 TICKET_EVALUATION_NOT_FOUND`다. 과거 사고는 참조 자료이며 평가 ID·대상 집계에 포함하지 않는다.
 - `evaluated_ticket_counts`는 규칙 계산 진행과 관계없이 확정 시 고정한 필수 평가 대상을 집계한다. `resolved` 집계는 `resolved`·`closed`, `unresolved` 집계는 `open`·`in_progress`·`waiting`이다. 초기·이월 티켓 상세는 규칙 처리 전에도 두 상태와 결과 `null`을 반환할 수 있어야 한다. 판정은 `PASS`, `NOT_MET`, `NOT_OBSERVED`, `NOT_APPLICABLE`을 사용한다. 근거 링크는 소유·공개 범위를 재검증한다.
+- 요약에 `evaluation_id`, `last_event_sequence`, `warnings`, 준비된 `rule_summary`(판정별 개수)를 제공한다. `GET .../evaluation/tickets`는 제목·출처·시도 및 최종 티켓 상태·처리 상태를 담은 `items`를 반환한다. 상세에는 확정 시 고정한 `timeline`(행동 ID, 순번, 서버 시각, 유형, 세부 정보) 및 티켓별 `warnings`, `evidence`(ID, 유형, 권한 검사 경로)가 포함된다. 자료 승인이 취소되면 해당 자료의 근거와 종속 설명은 조회에서 숨긴다. 확정본·규칙 원본은 보존한다.
+- 설명만 `FAILED`인 평가를 재시도하는 작업은 내부 Worker CLI `python -m app.simulation.evaluation_worker --retry-explanation <evaluation_id>`에서 수행한다.
+
+### 4.11 학습 자료 확인과 활용 기록
+
+`POST /api/v1/simulation-runs/{run_id}/tickets/{ticket_id}/learning-evidence`
+
+- `kind`는 `HOST_HISTORY | SOP`, `activity`는 `VIEWED | USED`, `source_id`는 자료의 UUID다. `USED`는 같은 실행과 티켓에서 `VIEWED` 후 수행한 가상 조치의 `action_event_id`가 필요하다. 승인 범위 밖 자료는 404, 자유 메모·다른 티켓의 조치·시간 순서 오류는 422다.
+- 최초 등록은 201, 동일한 기록의 재전송은 저장된 이벤트와 200을 반환한다. 같은 `USED` 기록을 다른 조치에 다시 연결하려면 409가 반환된다. 응답은 이벤트 `id`, `event_sequence`, `activity`를 제공한다. 자료 유형과 서버 시각은 실행 타임라인에서 조회한다. `GET` 요청과 AI 권고는 학습 행동을 생성하지 않는다. 완료 실행의 신규 기록은 409다.
 
 ## 5. 검색/RAG/링크 보안 계약
 

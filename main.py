@@ -12,6 +12,7 @@ from app.simulation.resources import router as training_resources
 from app.simulation.handover import router as training_handover
 from app.simulation.evaluations import router as training_evaluations
 from app.simulation.actions import router as training_actions
+from app.simulation.learning import router as training_learning
 from app.tickets import router as ticket_router
 
 app = FastAPI(title="IT 운영 지원", version="0.1.0")
@@ -23,6 +24,7 @@ app.include_router(training_resources, prefix="/api/v1")
 app.include_router(training_handover, prefix="/api/v1")
 app.include_router(training_evaluations, prefix="/api/v1")
 app.include_router(training_actions, prefix="/api/v1")
+app.include_router(training_learning, prefix="/api/v1")
 for operations_router in (ticket_router, knowledge_router, agent_router, handover_router, ticket_operations_router):
     app.include_router(operations_router, prefix="/api/v1", dependencies=[Depends(require_operator)])
 

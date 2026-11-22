@@ -10,6 +10,7 @@ from pydantic import BaseModel, ConfigDict, StringConstraints
 from app.agent.queue import process_agent_queue
 from app.knowledge.embedding import MAX_QUERY_LENGTH, EmbeddingFailure, get_embedder
 from app.knowledge.indexing import clean_orphan_files, process_next
+from app.simulation.evaluation_worker import STAGES, process_evaluation_queue
 
 logger = logging.getLogger(__name__)
 
@@ -32,6 +33,7 @@ def process_queue(stop: Event) -> None:
 async def lifespan(app: FastAPI):
     stop = Event()
     threads = [Thread(target=target, args=(stop,), daemon=True) for target in (process_queue, process_agent_queue)]
+    threads.extend(Thread(target=process_evaluation_queue, args=(stage, stop), daemon=True) for stage in STAGES)
     for thread in threads:
         thread.start()
     try:

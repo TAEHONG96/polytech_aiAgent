@@ -194,6 +194,10 @@ CREATE INDEX idx_scenario_incidents_host_time
 - 사용자 행동 이벤트는 향후 `(occurred_at, event_sequence)`로 정렬하며 실행별 이벤트 순번의 유일성을 보장한다. 종료 시 행동 범위와 평가 규칙 버전을 고정한다. 소요 시간과 근무시간 준수 여부는 평가에서 제외한다. 종료 후 도착한 AI 결과는 분석 이력에만 저장한다.
 
 Phase 3 물리 스키마인 `0007_simulation_workflows`는 기존 `ticket_events`를 확장한다. 교육 감사 행에 실행 ID와 실행별 `event_sequence`를 추가하고 티켓의 실행과 복합 FK로 연결한다. `simulation_runs.last_event_sequence`를 같은 트랜잭션에서 증가시켜 기존 교육 티켓 편집·작업과 가상 조치·자유 메모를 하나의 순번으로 정렬한다. 조치·메모는 실행별 키와 요청 다이제스트를 추가 저장한다. 운영 감사 행에는 교육 순번을 부여하지 않는다. 판정에 사용할 조치 카탈로그는 기존 `simulation_scenarios.config`에 발행하며 가상 장비 상태는 `simulation_run_hosts.state`에 저장한다.
+
+Phase 4 물리 스키마인 `0008_training_evaluation`은 완료 실행의 확정 리비전을 `handover_revisions(handover_id, version)`으로 연결한다. 이 연결은 기존 완료 행에서 비어 있을 수 있다. `simulation_evaluations`는 확정 멱등 키·요청 다이제스트·응답 영수증과 규칙·설명 각각의 시도 횟수, 작업 가능 시각, lease 토큰·만료, 오류 코드를 저장한다. 활성 큐의 두 부분 인덱스를 사용한다. 평가 입력·확정 영수증은 런타임 역할에서 삽입만 가능하며 결과 열과 작업 상태는 Worker가 갱신한다.
+
+`simulation_learning_events`는 티켓 버전을 바꾸지 않는 학습 기록용이다. `(simulation_run_id, ticket_id)`로 티켓과 연결하고 실행별 이벤트 순번을 사용한다. 한 티켓에 대해 자료별 확인·활용 행은 각각 유일하다. 활용은 이미 저장된 같은 티켓의 가상 조치 이벤트를 참조한다. 자료 종류에 따라 교육 승인과 소유 범위를 애플리케이션이 검증한다. 런타임 역할의 테이블 권한은 조회와 삽입이며 기존 운영 업무 테이블의 계약을 유지한다.
 - 실행은 근무 종료 시각과 독립적이다. 교육 발신 인계 최종 확정이 유일한 완료 전이다. 인계 FK와 평가 스냅샷은 후속 단계에서 추가한다.
 - 운영 행의 교육 필드는 모두 NULL이다. 기존 운영 회차 FK를 유지하며 실습은 발행된 슬롯을 참조한다. 티켓 UUID는 실행마다 새로 생성하며 표시 번호는 현행 전역 INC 시퀀스를 사용한다.
 

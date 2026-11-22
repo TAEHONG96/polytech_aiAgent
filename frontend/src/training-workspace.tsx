@@ -5,6 +5,7 @@ import type { Run as Analysis } from './agent'
 import { api, ApiError, errorMessage, statuses } from './api'
 import type { Session, Ticket } from './api'
 import { TicketOperations } from './ticket-operations'
+import { TrainingEvaluation, TrainingHandover } from './training-evaluation'
 
 const kst = new Intl.DateTimeFormat('ko-KR', {
   timeZone: 'Asia/Seoul', dateStyle: 'short', timeStyle: 'short',
@@ -56,7 +57,8 @@ function Overview({ base, run, session }: { base: string; run: Run; session: Ses
     <h1>{run.scenario.key} v{run.scenario.version}</h1>
     <p>{run.status === 'ACTIVE' ? '진행 중' : '완료'} · 고정 실습 시각 {date(run.virtual_now)} KST</p>
     <nav className="row" aria-label="실습 자료"><a href="#schedule">근무·인계</a><a href="#tickets">티켓</a>
-      <a href="#knowledge">SOP·유사 장애</a></nav>
+      <a href="#knowledge">SOP·유사 장애</a><a href="#outgoing">발신 인계</a>
+      {run.status === 'COMPLETED' && <a href="#evaluation">평가 결과</a>}</nav>
     {schedule.error || incoming.error || tickets.error ? <p role="alert">{schedule.error || incoming.error || tickets.error}</p> : null}
     <section id="schedule" className="surface">
       <h2>4조 2교대 근무</h2>
@@ -79,6 +81,8 @@ function Overview({ base, run, session }: { base: string; run: Run; session: Ses
       ))}</ul>
     </section>
     <Knowledge base={base} session={session} />
+    <TrainingHandover base={base} session={session} completed={run.status === 'COMPLETED'} />
+    {run.status === 'COMPLETED' && <TrainingEvaluation base={base} />}
   </>
 }
 
@@ -104,16 +108,20 @@ function TicketWorkspace({ base, ticketId, run, session }: { base: string; ticke
       {incidents.error && <p role="alert">{incidents.error}</p>}
       {incidents.data?.incidents.length === 0 && <p>승인된 과거 장애가 없습니다.</p>}
       <ul>{incidents.data?.incidents.map(item => <li key={item.id}><a href={item.source_url}>{item.summary}</a>
-        {' · '}{date(item.occurred_at)} KST <p>{item.resolution}</p></li>)}</ul>
+        {' · '}{date(item.occurred_at)} KST <p>{item.resolution}</p>
+        {!readOnly && <LearningControl path={path} kind="HOST_HISTORY" sourceId={item.id} session={session} />}
+      </li>)}</ul>
     </section>
-    <Knowledge base={base} session={session} ticketId={ticketId} />
+    <Knowledge base={base} session={session} ticketId={ticketId} readOnly={readOnly} />
     <TrainingAnalysis base={base} path={path} session={session} readOnly={readOnly} />
     <VirtualActions path={path} version={current.version} session={session} readOnly={readOnly} onVersion={setVersion} />
     <div id="work"><TicketOperations ticket={current} session={session} trainingPath={base} readOnly={readOnly} onVersion={setVersion} /></div>
   </>
 }
 
-function Knowledge({ base, ticketId, session }: { base: string; ticketId?: string; session: Session }) {
+function Knowledge({ base, ticketId, session, readOnly = false }: {
+  base: string; ticketId?: string; session: Session; readOnly?: boolean
+}) {
   const sops = useResource<{ items: Sop[] }>(base + '/sops')
   const [hits, setHits] = useState<Hit[]>()
   const [error, setError] = useState('')
@@ -155,8 +163,55 @@ function Knowledge({ base, ticketId, session }: { base: string; ticketId?: strin
     <h3>승인 SOP</h3>
     {sops.data?.items.length === 0 && <p>현재 승인 SOP가 없습니다.</p>}
     <ul>{sops.data?.items.map(sop => <li key={sop.id}><a href={'/api/v1' + base + '/sops/' + sop.id}>{sop.title}</a>
-      {' · '}<a href={sop.original_url}>원본</a></li>)}</ul>
+      {' · '}<a href={sop.original_url}>원본</a>
+      {ticketId && !readOnly && <LearningControl path={base + '/tickets/' + ticketId} kind="SOP" sourceId={sop.id} session={session} />}
+    </li>)}</ul>
   </section>
+}
+
+function LearningControl({ path, kind, sourceId, session }: {
+  path: string; kind: 'HOST_HISTORY' | 'SOP'; sourceId: string; session: Session
+}) {
+  const [options, setOptions] = useState<Activity[]>()
+  const [status, setStatus] = useState('')
+  const [error, setError] = useState('')
+  const [busy, setBusy] = useState(false)
+  async function save(activity: 'VIEWED' | 'USED', action?: string) {
+    setError('')
+    setBusy(true)
+    try {
+      await api(path + '/learning-evidence', {
+        method: 'POST', body: JSON.stringify({ kind, source_id: sourceId, activity, action_event_id: action }),
+      }, session.csrf_token)
+      setStatus(activity === 'VIEWED' ? '자료 확인 기록 저장됨' : '자료 활용 기록 저장됨')
+    } catch (failure) { setError(errorMessage(failure)) }
+    finally { setBusy(false) }
+  }
+  async function loadActions() {
+    setError('')
+    try {
+      const data = await api<{ activity: Activity[] }>(path + '/actions')
+      setOptions(data.activity.filter(entry => entry.kind === 'ACTION'))
+    } catch (failure) { setError(errorMessage(failure)) }
+  }
+  return <div className="row">
+    <button className="secondary" type="button" disabled={busy} onClick={() => void save('VIEWED')}>자료 확인 기록</button>
+    <button className="secondary" type="button" disabled={busy} onClick={() => void loadActions()}>수행한 조치에 연결</button>
+    {status && <span role="status">{status}</span>}
+    {error && <span role="alert">{error}</span>}
+    {options && (options.length === 0 ? <p>연결할 수행 조치가 없습니다.</p> :
+      <form className="row" onSubmit={event => {
+        event.preventDefault()
+        const action = new FormData(event.currentTarget).get('action')
+        if (typeof action === 'string' && action) void save('USED', action)
+      }}>
+        <label aria-label="수행 조치">수행 조치<select name="action" required defaultValue=""><option value="">선택</option>
+          {options.map(item => <option key={item.action_id} value={item.action_id}>
+            {item.event_sequence} · {item.result?.message ?? item.action_code}</option>)}
+        </select></label>
+        <button disabled={busy}>자료 활용 저장</button>
+      </form>)}
+  </div>
 }
 
 function TrainingAnalysis({ base, path, session, readOnly }: { base: string; path: string; session: Session; readOnly: boolean }) {

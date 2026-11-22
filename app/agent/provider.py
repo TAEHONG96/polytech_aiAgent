@@ -69,6 +69,10 @@ class FakeGenerator:
             from app.handover.analysis import fake_response
 
             return fake_response(request, contents, config)
+        if request.get("purpose") == "evaluation_feedback":
+            from app.simulation.evaluation_feedback import fake_response
+
+            return fake_response(request)
         if config.response_mime_type == "application/json":
             sources = request["evidence"]
             current = next((item for item in sources if item["kind"] == "TICKET_DETAILS"), None)

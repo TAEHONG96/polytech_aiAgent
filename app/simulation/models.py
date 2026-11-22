@@ -89,6 +89,10 @@ class SimulationRun(Base):
     __table_args__ = (
         UniqueConstraint("id", "scenario_id", name="uq_simulation_run_scenario"),
         UniqueConstraint("user_id", "start_request_key", name="uq_simulation_run_request"),
+        ForeignKeyConstraint(("finalized_handover_id", "finalized_revision"),
+                             ("handover_revisions.handover_id", "handover_revisions.version"),
+                             name="fk_run_final_revision", match="FULL"),
+        CheckConstraint("finalized_handover_id IS NULL OR status='COMPLETED'", name="ck_run_final_state"),
         CheckConstraint(
             "(status = 'ACTIVE' AND completed_at IS NULL) "
             "OR (status = 'COMPLETED' AND completed_at IS NOT NULL)",
@@ -106,6 +110,8 @@ class SimulationRun(Base):
     incoming_report_snapshot: Mapped[dict] = mapped_column(JSONB)
     start_request_key: Mapped[str] = mapped_column(String(128))
     last_event_sequence: Mapped[int] = mapped_column(BigInteger, server_default=text("0"))
+    finalized_handover_id: Mapped[UUID | None]
+    finalized_revision: Mapped[int | None]
 
 
 class SimulationRunHost(Base):
@@ -171,6 +177,19 @@ class SimulationEvaluation(Base):
     natural_language_summary: Mapped[dict | None] = mapped_column(JSONB)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
     updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
+    finalize_key: Mapped[str | None] = mapped_column(String(128))
+    finalize_digest: Mapped[str | None] = mapped_column(String(64))
+    finalize_response: Mapped[dict | None] = mapped_column(JSONB)
+    rules_attempts: Mapped[int] = mapped_column(server_default=text("0"))
+    rules_available_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    rules_lease_token: Mapped[UUID | None]
+    rules_lease_until: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    rules_error: Mapped[str | None] = mapped_column(String(64))
+    explanation_attempts: Mapped[int] = mapped_column(server_default=text("0"))
+    explanation_available_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    explanation_lease_token: Mapped[UUID | None]
+    explanation_lease_until: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    explanation_error: Mapped[str | None] = mapped_column(String(64))
 
 
 class SimulationTicketEvaluation(Base):
@@ -189,3 +208,25 @@ class SimulationTicketEvaluation(Base):
     rule_results: Mapped[list | None] = mapped_column(JSONB)
     evidence: Mapped[list | None] = mapped_column(JSONB)
     explanation: Mapped[dict | None] = mapped_column(JSONB)
+
+
+class LearningEvent(Base):
+    __tablename__ = "simulation_learning_events"
+    __table_args__ = (
+        ForeignKeyConstraint(("simulation_run_id", "ticket_id"), ("tickets.simulation_run_id", "tickets.id"),
+                             name="fk_learning_run_ticket"),
+        UniqueConstraint("simulation_run_id", "event_sequence", name="uq_learning_sequence"),
+        UniqueConstraint("simulation_run_id", "ticket_id", "kind", "source_id", "activity", name="uq_learning_evidence"),
+        CheckConstraint("kind IN ('HOST_HISTORY','SOP') AND activity IN ('VIEWED','USED') "
+                        "AND (activity='USED') = (action_event_id IS NOT NULL)", name="ck_learning_activity"),
+    )
+    id: Mapped[UUID] = mapped_column(primary_key=True, default=uuid4)
+    simulation_run_id: Mapped[UUID]
+    ticket_id: Mapped[UUID]
+    actor_id: Mapped[UUID] = mapped_column(ForeignKey("users.id"))
+    event_sequence: Mapped[int] = mapped_column(BigInteger)
+    occurred_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
+    kind: Mapped[str] = mapped_column(String(12))
+    source_id: Mapped[UUID]
+    activity: Mapped[str] = mapped_column(String(6))
+    action_event_id: Mapped[UUID | None] = mapped_column(ForeignKey("ticket_events.id"))
