@@ -1,4 +1,5 @@
 import os
+from concurrent.futures import ThreadPoolExecutor
 from datetime import timedelta
 from types import SimpleNamespace
 from uuid import UUID, uuid4
@@ -137,18 +138,35 @@ def test_sdk_uses_separate_content_and_checks_output():
 @pytest.mark.parametrize(("upstream", "status", "code"), [(429, 429, "EMBEDDING_RATE_LIMIT"), (503, 503, "EMBEDDING_UNAVAILABLE")])
 def test_worker_http_error_mapping(monkeypatch, upstream, status, code):
     transport = httpx2.MockTransport(lambda request: httpx2.Response(upstream, text="vendor data"))
-    monkeypatch.setattr(
-        search, "httpx2", SimpleNamespace(
-            Client=lambda **kwargs: httpx2.Client(transport=transport, **kwargs),
-            HTTPError=httpx2.HTTPError,
-        )
-    )
     from app.http import ApiError
 
-    with pytest.raises(ApiError) as failure:
-        search.worker_query_vector("test", "test-profile")
+    with httpx2.Client(transport=transport) as client:
+        monkeypatch.setattr(search, "embedding_worker_client", lambda: client)
+        with pytest.raises(ApiError) as failure:
+            search.worker_query_vector("test", "test-profile")
     assert (failure.value.status, failure.value.code) == (status, code)
     assert "vendor data" not in str(failure.value)
+
+
+def test_worker_reuses_one_http_client_across_searches(monkeypatch):
+    profile = "test-profile"
+    vector = [1.0] + [0.0] * (EMBEDDING_DIM - 1)
+    transport = httpx2.MockTransport(lambda request: httpx2.Response(200, json={
+        "profile": profile, "vector": vector,
+    }))
+    created = []
+    with httpx2.Client(transport=transport) as client:
+        def create_client(**options):
+            created.append(options)
+            return client
+
+        monkeypatch.setattr(search, "_worker_client", None)
+        monkeypatch.setattr(search.httpx2, "Client", create_client)
+        with ThreadPoolExecutor(max_workers=5) as pool:
+            results = list(pool.map(lambda query: search.worker_query_vector(query, profile),
+                                    ("one", "two", "three", "four", "five")))
+        assert results == [vector] * 5
+        assert created == [{"timeout": 18, "trust_env": False}]
 
 
 @postgres

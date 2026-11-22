@@ -40,10 +40,13 @@ docker compose -p polytech-qa-rag-fake -f compose.yaml run --build --rm -T worke
 
 $env:APP_PORT = '18085'
 $env:APP_ORIGIN = 'http://127.0.0.1:18085'
+$env:QA_BASE_URL = $env:APP_ORIGIN
 docker compose -p polytech-qa-browser -f compose.yaml -f compose.override.yaml up --build --wait nginx worker
 docker compose -p polytech-qa-browser -f compose.yaml -f compose.override.yaml exec -T worker python -m app.knowledge.demo
-$qaRoster = docker compose -p polytech-qa-browser -f compose.yaml -f compose.override.yaml run --build --rm -T test python -m tests.qa_roster --shifts 4 | Select-Object -Last 1 | ConvertFrom-Json
+$qaRoster = docker compose -p polytech-qa-browser -f compose.yaml -f compose.override.yaml run --build --rm -T test python -m tests.qa_roster --shifts 6 | Select-Object -Last 1 | ConvertFrom-Json
 $env:QA_SHIFT_ID = $qaRoster[0]
+$env:QA_APPROVAL_SHIFT_ID = $qaRoster[2]
+$env:QA_EDIT_SHIFT_ID = $qaRoster[4]
 Push-Location frontend
 npm ci
 npx playwright install chromium
@@ -54,9 +57,11 @@ Pop-Location
 브라우저 실행마다 `qa_roster`로 새 회차를 만든다. 같은 로그인 주소에서 제한 테스트를 실행한 직후 다시 로그인해야 하면 Nginx 버킷이 소진 상태에서 회복될 시간을 확보한다. Python 3.12 가상환경에 `requirements-dev.txt`를 설치하면 호스트에서 성능 및 복원 명령도 실행할 수 있다.
 
 ```powershell
+$qaNginx = docker compose -p polytech-qa-browser -f compose.yaml -f compose.override.yaml ps -q nginx
+docker run --rm --network "container:$qaNginx" -e APP_ORIGIN polytech-qa-browser-test python -m tests.qa_rate_limit
 $qaPerfRoster = docker compose -p polytech-qa-browser -f compose.yaml -f compose.override.yaml run --rm -T test python -m tests.qa_roster --shifts 4 | ConvertFrom-Json
-python -m tests.qa_performance --shifts $qaPerfRoster[0] $qaPerfRoster[1] $qaPerfRoster[2]
-python -m tests.qa_persistence --project polytech-qa-browser --restore-project polytech-qa-restored
+python -m tests.qa_performance --origin $env:APP_ORIGIN --shifts $qaPerfRoster[0] $qaPerfRoster[1] $qaPerfRoster[2]
+python -m tests.qa_persistence --project polytech-qa-browser --restore-project polytech-qa-restored --origin $env:APP_ORIGIN --wait-timeout 240
 ```
 
 `qa_persistence`는 지정한 QA 서비스만 중단·재기동하며, 비어 있는 별도 QA 볼륨에 DB 및 SOP 원본을 복원한다. Docker CLI가 PATH에 없다면 `QA_DOCKER_EXECUTABLE`에 경로를 지정한다. 검증 후 QA 프로젝트는 `docker compose -p <QA 프로젝트> ... stop`으로 정지할 수 있다.

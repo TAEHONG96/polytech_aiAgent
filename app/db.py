@@ -9,6 +9,7 @@ from sqlalchemy import create_engine, text
 from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy.orm import Session
 
+from app import model_registry as _model_registry  # Load cross-domain foreign-key targets for every DB entry point.
 from app.http import ApiError
 from app.settings import ROOT, settings
 

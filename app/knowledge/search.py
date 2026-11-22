@@ -1,5 +1,7 @@
+import atexit
 import os
 from dataclasses import dataclass
+from threading import Lock
 from uuid import UUID
 
 import httpx2
@@ -11,6 +13,27 @@ from app.knowledge.embedding import GEMINI_SEARCH_PROFILE, EmbeddingFailure, che
 from app.knowledge.indexing import RESOLVED_STATUSES
 from app.knowledge.models import IndexJob, IndexStatus, KnowledgeChunk, SopDocument, SourceType
 from app.models import Ticket
+
+
+_worker_client_lock = Lock()
+_worker_client: httpx2.Client | None = None
+
+
+def embedding_worker_client() -> httpx2.Client:
+    global _worker_client
+    with _worker_client_lock:
+        if _worker_client is None:
+            _worker_client = httpx2.Client(timeout=18, trust_env=False)
+        return _worker_client
+
+
+@atexit.register
+def close_embedding_worker_client() -> None:
+    global _worker_client
+    with _worker_client_lock:
+        if _worker_client is not None:
+            _worker_client.close()
+            _worker_client = None
 
 
 @dataclass(frozen=True)
@@ -30,8 +53,9 @@ class SearchResult:
 def worker_query_vector(query: str, profile: str) -> list[float]:
     url = os.environ.get("KNOWLEDGE_WORKER_URL", "http://worker:8001")
     try:
-        with httpx2.Client(timeout=18, trust_env=False) as client:
-            response = client.post(f"{url.rstrip('/')}/query-embedding", json={"query": query, "profile": profile})
+        response = embedding_worker_client().post(
+            f"{url.rstrip('/')}/query-embedding", json={"query": query, "profile": profile},
+        )
         if response.status_code == 429:
             raise ApiError(429, "EMBEDDING_RATE_LIMIT", "임베딩 호출 한도를 초과했습니다.")
         response.raise_for_status()

@@ -11,5 +11,5 @@ export default defineConfig({
   workers: 1,
   timeout: 60_000,
   reporter: 'list',
-  use: { baseURL, browserName: 'chromium' },
+  use: { baseURL, browserName: 'chromium', trace: 'retain-on-failure' },
 })

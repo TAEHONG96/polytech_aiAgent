@@ -14,10 +14,11 @@ import httpx2
 from tests.qa_roster import PASSWORD, USERNAMES
 
 
-def measure(base_url: str, shifts: list[str]) -> dict:
+def measure(base_url: str, shifts: list[str], *, profile: bool = False) -> dict:
     timings = defaultdict(list)
     statuses = defaultdict(Counter)
     expected_statuses = {}
+    request_samples = []
 
     def checked(response, expected):
         if response.status_code != expected:
@@ -30,11 +31,17 @@ def measure(base_url: str, shifts: list[str]) -> dict:
         client.headers.update({"Origin": base_url, "X-CSRF-Token": checked(response, 200)["csrf_token"]})
 
     def recorded(client, name, method, path, expected=200, **kwargs):
+        if profile:
+            kwargs["headers"] = {"X-QA-Operation": name}
         start = time.perf_counter()
         response = client.request(method, path, **kwargs)
-        timings[name].append((time.perf_counter() - start) * 1000)
+        elapsed_ms = (time.perf_counter() - start) * 1000
+        timings[name].append(elapsed_ms)
         statuses[name][response.status_code] += 1
         expected_statuses[name] = expected
+        if profile:
+            request_samples.append({"operation": name, "request_id": response.headers.get("x-request-id"),
+                                    "http_ms": round(elapsed_ms, 2)})
         return response
 
     options = dict(base_url=base_url + "/api/v1", timeout=20, trust_env=False)
@@ -100,7 +107,7 @@ def measure(base_url: str, shifts: list[str]) -> dict:
                              json={"expected_version": ready["version"]}), 200)
             recorded(actor, "handover_get", "GET", path)
 
-    return {
+    result = {
         "provider": "fake", "max_concurrency": 5, "agent_poll_interval_ms": 100,
         "operations": {name: {
             "count": len(samples), "statuses": dict(statuses[name]),
@@ -110,14 +117,21 @@ def measure(base_url: str, shifts: list[str]) -> dict:
             "max_ms": round(max(samples), 2),
         } for name, samples in timings.items()},
     }
+    if profile:
+        result["request_samples"] = request_samples
+    return result
 
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--origin", default="http://127.0.0.1:18085")
     parser.add_argument("--shifts", nargs=3, required=True)
+    parser.add_argument("--profile", action="store_true", help="Include request IDs for QA timing correlation.")
     args = parser.parse_args()
     origin = httpx2.URL(args.origin)
     if origin.scheme != "http" or origin.host != "127.0.0.1" or origin.port in {80, 8080, None} or origin.path != "/":
         parser.error("Use the loopback origin of the isolated Fake QA stack.")
-    print(json.dumps(measure(args.origin, args.shifts), indent=2))
+    report = measure(args.origin, args.shifts, profile=args.profile)
+    print(json.dumps(report, indent=2))
+    if any(operation["errors"] for operation in report["operations"].values()):
+        raise SystemExit(1)

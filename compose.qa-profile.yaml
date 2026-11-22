@@ -1,0 +1,12 @@
+services:
+  api:
+    environment:
+      QA_API_PROFILE: "1"
+      PYTHONPATH: /qa:/app
+    command: ["python", "-m", "uvicorn", "qa_profile:app", "--host", "0.0.0.0", "--port", "8000", "--no-access-log"]
+    volumes: !override
+      - sop_files:/var/lib/polytech/sops
+      - ./tests/qa_profile.py:/qa/qa_profile.py:ro
+  nginx:
+    volumes:
+      - ./tests/qa-nginx-log-format.conf:/etc/nginx/conf.d/00-polytech-log.conf:ro

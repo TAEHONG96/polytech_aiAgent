@@ -37,7 +37,6 @@ function Login({ onLogin }: { onLogin: (session: Session) => void }) {
     const form = Object.fromEntries(new FormData(event.currentTarget))
     try {
       onLogin(await api<Session>('/auth/login', { method: 'POST', body: JSON.stringify(form) }))
-      if (window.location.pathname === '/login') window.location.assign('/tickets')
     } catch (failure) {
       setError(errorMessage(failure))
     } finally {
@@ -305,18 +304,37 @@ function TicketDetail({ id, edit, session }: { id: string; edit: boolean; sessio
 function App() {
   const [session, setSession] = useState<Session | null | undefined>()
   const [error, setError] = useState('')
-  const path = window.location.pathname
+  const [path, setPath] = useState(() => window.location.pathname)
   const detail = /^\/tickets\/([^/]+)(\/edit)?$/.exec(path)
   const handover = /^\/handovers\/([^/]+)$/.exec(path)
 
   const sopDetail = /^\/knowledge\/([^/]+)$/.exec(path)
 
   useEffect(() => {
-    api<Session>('/auth/session').then(setSession).catch(failure => {
+    let cancelled = false
+    api<Session>('/auth/session').then(restored => {
+      if (!cancelled) setSession(restored)
+    }).catch(failure => {
+      if (cancelled) return
       if (!(failure instanceof ApiError && failure.status === 401)) setError(errorMessage(failure))
       setSession(null)
     })
+    return () => { cancelled = true }
   }, [])
+
+  useEffect(() => {
+    const followHistory = () => setPath(window.location.pathname)
+    window.addEventListener('popstate', followHistory)
+    return () => window.removeEventListener('popstate', followHistory)
+  }, [])
+
+  function startSession(authenticated: Session) {
+    if (path === '/login') {
+      window.history.pushState(null, '', '/tickets')
+      setPath('/tickets')
+    }
+    setSession(authenticated)
+  }
 
   async function logout() {
     if (!session) return
@@ -343,7 +361,7 @@ function App() {
         <ErrorNotice message={error} />
         {path === '/about' ? <About signedIn={Boolean(session)} />
           : session === undefined ? <p role="status">세션을 확인하는 중입니다.</p>
-          : !session ? <Login onLogin={setSession} />
+          : !session ? <Login onLogin={startSession} />
           : path === '/agent' ? <AgentPage session={session} />
           : path === '/handovers' ? <HandoverDashboard session={session} />
           : handover ? <HandoverDetail id={handover[1]} session={session} />
