@@ -68,6 +68,7 @@
 | Method | Path (모두 `/api/v1` 상대) | 설명 | 상태 제약 |
 |---|---|---|---|
 | POST | `/auth/register` | 계정 등록 | 비로그인·보안 검증 |
+| GET | `/auth/registration` | 교육 가입 활성 여부 조회 | 공개, 캐시 금지 |
 | GET | `/simulation` | 현재 사용자의 시작 가능/ACTIVE/최근 완료 요약 | 로그인 |
 | GET | `/simulation-runs` | 내 실행 이력 목록 | 로그인 |
 | POST | `/simulation-runs` | 새 실행 생성/중복 시작 방지 | ACTIVE 중복 생성 금지 |
@@ -126,7 +127,8 @@ Phase 1 시작 요청의 `Idempotency-Key`는 필수이며 공백 없이 1~128�
 
 - 201 생성, 비밀번호/중복/요청 제한 및 Origin 정책 적용.
 - 위 값은 문법 예시다. 로그인 식별자는 기존 `username`을 사용한다. 비밀번호 정책은 가입 구현 시 확정한다.
-- 등록 직후 자동 로그인 여부는 **미확정**. 기본안은 등록 성공 후 기존 로그인 사용.
+- 등록 후 기존 로그인 화면으로 진행한다. 공개 Compose 구성에서는 가입을 비활성화한다.
+- `GET /api/v1/auth/registration`은 `{"enabled":false}` 또는 `{"enabled":true}`를 반환한다. 가입 안내 확인은 가입 쓰기 요청의 제한 버킷을 사용하지 않는다. 가입 POST의 Origin과 요청 제한은 유지한다.
 
 ### 4.2 현재 실습 요약
 

@@ -12,6 +12,7 @@ import { HandoverDashboard, HandoverDetail } from './handover'
 import { TicketOperations } from './ticket-operations'
 import { ErrorNotice } from './ui'
 import './style.css'
+import './training.css'
 
 const priorities: Severity[] = ['P1', 'P2', 'P3', 'P4']
 const showDemoAccount = import.meta.env.VITE_PUBLIC_DEMO === 'true'
@@ -27,9 +28,20 @@ function dateInput(value: string) {
   return inputDate.format(new Date(value)).replace(' ', 'T')
 }
 
-function Login({ onLogin }: { onLogin: (session: Session) => void }) {
+function Login({ onLogin, path }: { onLogin: (session: Session) => void; path: string }) {
   const [error, setError] = useState('')
   const [busy, setBusy] = useState(false)
+  const [registration, setRegistration] = useState<boolean>()
+  const [created, setCreated] = useState(false)
+  const joining = path === '/register' && !created
+
+  useEffect(() => {
+    const controller = new AbortController()
+    api<{ enabled: boolean }>('/auth/registration', { signal: controller.signal })
+      .then(result => { if (!controller.signal.aborted) setRegistration(result.enabled) })
+      .catch(() => { if (!controller.signal.aborted) setRegistration(false) })
+    return () => controller.abort()
+  }, [])
 
   async function submit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault()
@@ -37,7 +49,12 @@ function Login({ onLogin }: { onLogin: (session: Session) => void }) {
     setError('')
     const form = Object.fromEntries(new FormData(event.currentTarget))
     try {
-      onLogin(await api<Session>('/auth/login', { method: 'POST', body: JSON.stringify(form) }))
+      if (joining) {
+        await api('/auth/register', { method: 'POST', body: JSON.stringify(form) })
+        setCreated(true)
+      } else {
+        onLogin(await api<Session>('/auth/login', { method: 'POST', body: JSON.stringify(form) }))
+      }
     } catch (failure) {
       setError(errorMessage(failure))
     } finally {
@@ -46,9 +63,10 @@ function Login({ onLogin }: { onLogin: (session: Session) => void }) {
   }
 
   return (
-    <section className="surface narrow">
-      <h1>운영자 로그인</h1>
-      {showDemoAccount && <aside className="demo-account" aria-labelledby="demo-account-title">
+    <section className="surface narrow training-login">
+      <h1>{joining ? '교육 계정 만들기' : '로그인'}</h1>
+      <p>{joining ? '교육 계정은 본인의 가상 근무와 평가 기록을 사용합니다.' : '교육 또는 운영 계정으로 로그인하세요.'}</p>
+      {showDemoAccount && !joining && <aside className="demo-account" aria-labelledby="demo-account-title">
         <h2 id="demo-account-title">시연용 데모 계정</h2>
         <dl className="details">
           <div><dt>사용자명</dt><dd><code>demo</code></dd></div>
@@ -57,11 +75,17 @@ function Login({ onLogin }: { onLogin: (session: Session) => void }) {
         <p className="meta">공용 계정입니다. 시연에는 합성 데이터만 사용해 주세요.</p>
       </aside>}
       <ErrorNotice message={error} />
-      <form onSubmit={submit}>
+      {created && <p role="status">교육 계정이 만들어졌습니다. 새 계정으로 로그인하세요.</p>}
+      {joining && registration === undefined && <p role="status">가입 가능 여부를 확인하는 중입니다.</p>}
+      {joining && registration === false && <p>현재 교육 계정 가입이 닫혀 있습니다.</p>}
+      {(!joining || registration) && <form key={String(joining)} onSubmit={submit}>
         <label>사용자명<input name="username" autoComplete="username" maxLength={64} required /></label>
-        <label>비밀번호<input name="password" type="password" autoComplete="current-password" required /></label>
-        <button disabled={busy}>로그인</button>
-      </form>
+        <label>비밀번호<input name="password" type="password" autoComplete={joining ? 'new-password' : 'current-password'}
+          minLength={joining ? 12 : undefined} required /></label>
+        <button disabled={busy}>{joining ? '교육 계정 만들기' : '로그인'}</button>
+      </form>}
+      {joining && <p><a href="/login">로그인으로 돌아가기</a></p>}
+      {!joining && !created && registration && <p><a href="/register">교육 계정 만들기</a></p>}
     </section>
   )
 }
@@ -330,7 +354,7 @@ function App() {
   }, [])
 
   function startSession(authenticated: Session) {
-    if (path === '/login') {
+    if (path === '/login' || path === '/register' || path === '/') {
       const destination = authenticated.roles.includes('trainee') ? '/simulation' : '/tickets'
       window.history.pushState(null, '', destination)
       setPath(destination)
@@ -352,7 +376,8 @@ function App() {
   const trainee = session?.roles.includes('trainee')
   return (
     <>
-      <header><nav className="shell row">
+      <a className="skip-link" href="#main-content">본문으로 이동</a>
+      <header className={trainee ? 'training-header' : undefined}><nav className="shell row">
         <div className="row">
           <a className="brand" href={trainee ? '/simulation' : '/tickets'}>{trainee ? '장애 대응 실습' : 'IT 운영 지원'}</a>
           <a href="/about" aria-current={path === '/about' ? 'page' : undefined}>소개</a>
@@ -360,11 +385,11 @@ function App() {
         </div>
         {session && <div className="row account"><span>{session.user.display_name}</span><button className="secondary" onClick={logout}>로그아웃</button></div>}
       </nav></header>
-      <main className="shell">
+      <main className={trainee ? 'shell training-shell' : 'shell'} id="main-content" tabIndex={-1}>
         <ErrorNotice message={error} />
         {path === '/about' ? <About signedIn={Boolean(session)} />
           : session === undefined ? <p role="status">세션을 확인하는 중입니다.</p>
-          : !session ? <Login onLogin={startSession} />
+          : !session ? <Login key={path} onLogin={startSession} path={path} />
           : trainee ? <TrainingPage key={path} path={path} session={session} />
           : path === '/agent' ? <AgentPage session={session} />
           : path === '/handovers' ? <HandoverDashboard session={session} />

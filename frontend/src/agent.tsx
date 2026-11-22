@@ -74,7 +74,7 @@ function Statements({ title, items }: { title: string; items: Statement[] }) {
   </section>
 }
 
-export function ReportView({ report }: { report: Report }) {
+export function ReportView({ report, sourceHref = (url: string) => url }: { report: Report; sourceHref?: (url: string) => string }) {
   return <>
     <section className="surface">
       <h2>분석 요약</h2><p>{report.summary}</p>
@@ -91,7 +91,7 @@ export function ReportView({ report }: { report: Report }) {
     {!!report.evidence.length && <section className="surface">
       <h2>참고 출처</h2>
       {report.evidence.map(source => <article className="agent-evidence" key={source.key} id={'evidence-' + source.key}>
-        <h3>[{source.key}] <a href={source.source_url}>{source.title}</a></h3>
+        <h3>[{source.key}] <a href={sourceHref(source.source_url)}>{source.title}</a></h3>
         <p className="meta">{evidenceLabel[source.kind] ?? source.kind}
           {source.page_number !== null && ' · ' + source.page_number + '쪽'}
           {source.section && ' · ' + source.section}

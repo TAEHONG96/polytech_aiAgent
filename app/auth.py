@@ -101,6 +101,12 @@ def dummy_password_hash() -> str:
     return password_hasher.hash(token_urlsafe(32))
 
 
+@router.get("/registration")
+def registration_status(response: Response) -> dict[str, bool]:
+    response.headers["Cache-Control"] = "no-store"
+    return {"enabled": settings().training_registration}
+
+
 @router.post("/register", status_code=201)
 def register(body: RegistrationInput, request: Request, response: Response, db: Database) -> dict:
     if not settings().training_registration:

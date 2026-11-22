@@ -2,12 +2,13 @@ import { useEffect, useRef, useState } from 'react'
 import type { FormEvent } from 'react'
 import { api, ApiError, errorMessage, statuses } from './api'
 import type { Session, Status } from './api'
+import { trainingSourceHref } from './training-source'
 
 type Warning = { code: string; ticket_id?: string }
 type Draft = {
   revision: number; status: string; finalized_at?: string; warnings: Warning[]
   content: { summary: string | null; open_items: { ticket_id: string; next_action: string | null }[] }
-  items: { id: string; title: string; number: string; status: Status }[]
+  items: { id: string; title: string; number: string; status: Status; next_action?: string | null }[]
 }
 type Stage = 'NOT_STARTED' | 'PENDING' | 'PROCESSING' | 'READY' | 'FAILED'
 type Summary = {
@@ -44,35 +45,51 @@ const eventLabels: Record<string, string> = {
 }
 const date = (value: string) => new Date(value).toLocaleString('ko-KR', { timeZone: 'Asia/Seoul' }) + ' KST'
 
-function Warnings({ warnings, titles }: { warnings: Warning[]; titles: Record<string, string> }) {
-  return warnings.length > 0 && <><h3>확정 경고</h3><ul>{warnings.map((warning, index) => (
-    <li key={index}>{warning.ticket_id && titles[warning.ticket_id] && titles[warning.ticket_id] + ' · '}
+function Warnings({ base, warnings, titles, completed = true }: {
+  base: string; warnings: Warning[]; titles: Record<string, string>; completed?: boolean
+}) {
+  return warnings.length > 0 && <aside className="training-warning"><h3>{completed ? '확정 경고' : '확정 전 검토 · 업무상 누락'}</h3>
+    {!completed && <p>보완할 수 있는 항목입니다. 이 경고가 있어도 보고서를 확정할 수 있습니다.</p>}
+    <ul>{warnings.map((warning, index) => (
+    <li key={index}>{warning.ticket_id && <><a href={`${base}/tickets/${warning.ticket_id}`}>{titles[warning.ticket_id] ?? '관련 티켓'}</a> · </>}
       {warningLabels[warning.code] ?? warning.code}</li>
-  ))}</ul></>
+  ))}</ul></aside>
 }
 
 export function TrainingHandover({ base, session, completed }: { base: string; session: Session; completed: boolean }) {
   const endpoint = base + '/outgoing-handover'
   const [draft, setDraft] = useState<Draft>()
-  const [error, setError] = useState('')
+  const [error, setError] = useState<{ title: string; message: string; code?: string }>()
+  const [refresh, setRefresh] = useState(0)
+  const [dirty, setDirty] = useState(false)
+  const [notice, setNotice] = useState('')
   const [busy, setBusy] = useState(false)
   const receipt = useRef<{ revision: number; key: string } | null>(null)
   useEffect(() => {
     const controller = new AbortController()
-    api<Draft>(endpoint, { signal: controller.signal }).then(setDraft)
-      .catch(failure => { if (!controller.signal.aborted) setError(errorMessage(failure)) })
+    api<Draft>(endpoint, { signal: controller.signal }).then(result => { setDraft(result); setDirty(false); setError(undefined) })
+      .catch(failure => { if (!controller.signal.aborted) showError(failure) })
     return () => controller.abort()
-  }, [endpoint])
+  }, [endpoint, refresh])
+
+  function showError(failure: unknown) {
+    const status = failure instanceof ApiError ? failure.status : undefined
+    setError({ title: status === 422 ? '보고서 입력 오류' : status === 409 ? '보고서 확정 또는 수정 충돌' : '보고서 요청 실패',
+      message: errorMessage(failure), code: failure instanceof ApiError ? failure.code : undefined })
+  }
 
   async function save(extra: object) {
     if (!draft) return
     setBusy(true)
-    setError('')
+    setError(undefined)
+    setNotice('')
     try {
       setDraft(await api<Draft>(endpoint, {
         method: 'PUT', body: JSON.stringify({ expected_revision: draft.revision, ...extra }),
       }, session.csrf_token))
-    } catch (failure) { setError(errorMessage(failure)) }
+      setDirty(false)
+      setNotice('초안이 저장되었습니다.')
+    } catch (failure) { showError(failure) }
     finally { setBusy(false) }
   }
 
@@ -88,10 +105,10 @@ export function TrainingHandover({ base, session, completed }: { base: string; s
 
   async function finalize(event: FormEvent<HTMLFormElement>) {
     event.preventDefault()
-    if (!draft) return
+    if (!draft || dirty) return
     if (receipt.current?.revision !== draft.revision) receipt.current = { revision: draft.revision, key: crypto.randomUUID() }
     setBusy(true)
-    setError('')
+    setError(undefined)
     try {
       await api(endpoint + '/finalize', {
         method: 'POST', headers: { 'Idempotency-Key': receipt.current.key },
@@ -99,24 +116,36 @@ export function TrainingHandover({ base, session, completed }: { base: string; s
       }, session.csrf_token)
       window.location.hash = 'evaluation'
       window.location.reload()
-    } catch (failure) { setError(errorMessage(failure)) }
+    } catch (failure) { showError(failure) }
     finally { setBusy(false) }
   }
 
   const titles = Object.fromEntries(draft?.items.map(item => [item.id, item.title]) ?? [])
-  return <section className="surface" id="outgoing">
-    <h2>다음 Bot에게 인계</h2>
-    {error && <p role="alert">{error}</p>}
+  const finalized = completed || draft?.status === 'FINALIZED'
+  return <section className="surface" id="outgoing" tabIndex={-1}>
+    <div className="training-heading"><h2>다음 Bot에게 인계</h2>{draft && <span className="training-badge">
+      {finalized ? '확정 · 읽기 전용' : '초안'} · 리비전 {draft.revision}</span>}</div>
+    {error && <div className="notice" role="alert"><strong>{error.title}</strong><p>{error.message}</p>
+      {error.code === 'VERSION_CONFLICT' && <button type="button" className="secondary" onClick={() => setRefresh(value => value + 1)}>최신 보고서 열기</button>}
+      {error.code === 'REPORT_SOURCE_CHANGED' && <p>인계 자료를 다시 수집하고 최신 티켓 내용을 확인하세요.</p>}
+      {!draft && <button type="button" className="secondary" onClick={() => setRefresh(value => value + 1)}>다시 불러오기</button>}
+    </div>}
     {!draft && !error && <p role="status">인계 보고서를 불러오는 중입니다.</p>}
     {draft && <>
-      {completed ? <>
+      {finalized ? <>
         <p>최종 확정 · 리비전 {draft.revision}{draft.finalized_at && ' · ' + date(draft.finalized_at)}</p>
         <p className="knowledge-text">{draft.content.summary ?? '요약이 비어 있습니다.'}</p>
-        <ul>{draft.content.open_items.map(item => <li key={item.ticket_id}>
-          <a href={base + '/tickets/' + item.ticket_id}>{titles[item.ticket_id] ?? '티켓'}</a> · {item.next_action}</li>)}</ul>
+        {draft.items.length ? <ul className="training-list">{draft.items.map(item => <li key={item.id}>
+          <div><a href={base + '/tickets/' + item.id}>{item.title}</a><p>{draft.content.open_items.find(note => note.ticket_id === item.id)?.next_action
+            ?? item.next_action ?? '기록된 다음 조치가 없습니다.'}</p></div><span className="training-badge">{statuses[item.status]}</span></li>)}</ul>
+          : <p>포함된 티켓이 없습니다.</p>}
+        {!completed && <a href={base + '#evaluation'} onClick={event => { event.preventDefault(); window.location.hash = 'evaluation'; window.location.reload() }}>완료 결과 열기</a>}
+        <a href={`${base}/outgoing-handover/revisions/${draft.revision}`}>확정 리비전 열기</a>
       </> : <>
-        <button type="button" className="secondary" disabled={busy} onClick={() => void save({ refresh_snapshot: true })}>인계 자료 다시 수집</button>
-        <form key={draft.revision} onSubmit={saveNotes}>
+        <p>미해결 티켓이 있어도 확정할 수 있습니다. 확정하면 실습이 종료되고 티켓, 작업, 인계 원본은 읽기 전용이 됩니다.</p>
+        <button type="button" className="secondary" disabled={busy || dirty} onClick={() => void save({ refresh_snapshot: true })}>인계 자료 다시 수집</button>
+        {draft.revision === 0 && <p className="meta">자료를 수집하면 티켓과 후속 작업을 확인할 수 있습니다.</p>}
+        <form key={`${draft.revision}-${refresh}`} onSubmit={saveNotes} onChange={() => setDirty(true)}>
           <label>인계 요약<textarea name="summary" rows={3} maxLength={4000} defaultValue={draft.content.summary ?? ''} /></label>
           {draft.items.map(item => <label key={item.id}>{item.title} · 다음 조치
             <textarea name={item.id} maxLength={4000} rows={2}
@@ -124,12 +153,15 @@ export function TrainingHandover({ base, session, completed }: { base: string; s
           </label>)}
           <button className="secondary" disabled={busy}>인계 초안 저장</button>
         </form>
-        <form onSubmit={finalize}>
-          <label><input type="checkbox" required /> 저장된 보고서를 최종 확정하고 실습을 종료합니다.</label>
-          <button disabled={busy}>인계 최종 확정</button>
+        {dirty && <p role="status">저장하지 않은 초안이 있습니다. 먼저 저장하세요.</p>}
+        {!dirty && notice && <p role="status">{notice}</p>}
+        <Warnings base={base} warnings={draft.warnings} titles={titles} completed={false} />
+        <form className="training-finalize" onSubmit={finalize}>
+          <label className="training-confirm"><input type="checkbox" required /> 저장된 보고서를 최종 확정하고 실습을 종료합니다.</label>
+          <button disabled={busy || dirty}>인계 최종 확정</button>
         </form>
       </>}
-      <Warnings warnings={draft.warnings} titles={titles} />
+      {finalized && <Warnings base={base} warnings={draft.warnings} titles={titles} />}
     </>}
   </section>
 }
@@ -140,7 +172,10 @@ export function TrainingEvaluation({ base }: { base: string }) {
   const [entries, setEntries] = useState<Entry[]>([])
   const [selected, select] = useState('')
   const [detail, setDetail] = useState<Detail>()
-  const [error, setError] = useState('')
+  const [summaryError, setSummaryError] = useState('')
+  const [listError, setListError] = useState('')
+  const [detailError, setDetailError] = useState('')
+  const [retry, setRetry] = useState(0)
   useEffect(() => {
     const controller = new AbortController()
     let timer: ReturnType<typeof setTimeout> | undefined
@@ -148,59 +183,77 @@ export function TrainingEvaluation({ base }: { base: string }) {
       try {
         const data = await api<Summary>(endpoint, { signal: controller.signal })
         if (controller.signal.aborted) return
+        setSummaryError('')
         setSummary(data)
         if (['PENDING', 'PROCESSING'].includes(data.rules_status) || ['PENDING', 'PROCESSING'].includes(data.explanation_status)) {
           timer = setTimeout(poll, 1000)
         }
       } catch (failure) {
         if (!controller.signal.aborted) {
-          setError(errorMessage(failure))
+          setSummaryError(errorMessage(failure))
           if (!(failure instanceof ApiError) || failure.status >= 500) timer = setTimeout(poll, 3000)
         }
       }
     }
     api<{ items: Entry[] }>(endpoint + '/tickets', { signal: controller.signal }).then(result => {
       setEntries(result.items)
-      select(result.items[0]?.ticket_id ?? '')
-    }).catch(failure => { if (!controller.signal.aborted) setError(errorMessage(failure)) })
+      select(previous => result.items.some(item => item.ticket_id === previous) ? previous : result.items[0]?.ticket_id ?? '')
+      setListError('')
+    }).catch(failure => { if (!controller.signal.aborted) setListError(errorMessage(failure)) })
     void poll()
     return () => { controller.abort(); clearTimeout(timer) }
-  }, [endpoint])
+  }, [endpoint, retry])
   useEffect(() => {
     if (!selected) return
     const controller = new AbortController()
-    api<Detail>(endpoint + '/tickets/' + selected, { signal: controller.signal }).then(setDetail)
-      .catch(failure => { if (!controller.signal.aborted) setError(errorMessage(failure)) })
+    api<Detail>(endpoint + '/tickets/' + selected, { signal: controller.signal }).then(result => { setDetail(result); setDetailError('') })
+      .catch(failure => { if (!controller.signal.aborted) setDetailError(errorMessage(failure)) })
     return () => controller.abort()
-  }, [endpoint, selected, summary?.rules_status, summary?.explanation_status])
+  }, [endpoint, selected, summary?.rules_status, summary?.explanation_status, retry])
   const current = detail?.ticket_id === selected ? detail : undefined
-  return <section className="surface" id="evaluation">
+  const error = summaryError || listError || detailError
+  return <section className="surface" id="evaluation" tabIndex={-1}>
     <h2>실습 평가</h2>
-    {error && <p role="alert">{error}</p>}
+    {error && <div className="notice" role="alert"><p>{error}</p><button className="secondary" onClick={() => setRetry(value => value + 1)}>평가 다시 불러오기</button></div>}
+    {!summary && !error && <p role="status">평가 상태를 불러오는 중입니다.</p>}
     {summary && <>
-      <p role="status">규칙 평가 {stateLabels[summary.rules_status]} · AI 설명 {stateLabels[summary.explanation_status]}</p>
-      <p>평가 대상 {summary.evaluated_ticket_counts.total}건 · 해결·종료 {summary.evaluated_ticket_counts.resolved}건 · 미해결 {summary.evaluated_ticket_counts.unresolved}건</p>
+      <div className="training-stages" role="status">
+        <span className="training-badge" data-state={summary.rules_status}>규칙 평가 {stateLabels[summary.rules_status]}</span>
+        <span className="training-badge" data-state={summary.explanation_status}>AI 설명 {stateLabels[summary.explanation_status]}</span>
+      </div>
+      {summary.explanation_status === 'FAILED' && <p className="training-warning">AI 설명을 준비하지 못했습니다. 규칙 결과와 행동 근거는 아래에서 확인할 수 있습니다.</p>}
+      {summary.rules_status === 'FAILED' && <p className="training-warning">규칙 평가에 실패했습니다. 확정 인계와 행동 기록은 확인할 수 있습니다.</p>}
+      <dl className="training-grid training-counts">
+        <div className="training-tile"><dt>평가 대상</dt><dd>{summary.evaluated_ticket_counts.total}건</dd></div>
+        <div className="training-tile"><dt>해결·종료</dt><dd>{summary.evaluated_ticket_counts.resolved}건</dd></div>
+        <div className="training-tile"><dt>미해결</dt><dd>{summary.evaluated_ticket_counts.unresolved}건</dd></div>
+      </dl>
       {summary.rule_summary && <p>규칙 판정 · {Object.entries(summary.rule_summary).map(([key, count]) => `${verdicts[key]} ${count}`).join(' · ')}</p>}
-      <Warnings warnings={summary.warnings} titles={Object.fromEntries(entries.map(entry => [entry.ticket_id, entry.title]))} />
+      <Warnings base={base} warnings={summary.warnings} titles={Object.fromEntries(entries.map(entry => [entry.ticket_id, entry.title]))} />
+      {summary.evaluated_ticket_counts.total === 0 && <p>이 실행에는 평가할 티켓이 없습니다.</p>}
     </>}
-    <ul>{entries.map(entry => <li key={entry.ticket_id}><button type="button" className="secondary" onClick={() => select(entry.ticket_id)}>{entry.title}</button></li>)}</ul>
-    {current && <>
+    <ul className="row training-picker" aria-label="평가 티켓">{entries.map(entry => <li key={entry.ticket_id}><button type="button" className="secondary"
+      aria-pressed={entry.ticket_id === selected} onClick={() => { setDetailError(''); select(entry.ticket_id) }}>{entry.title}</button></li>)}</ul>
+    {selected && !current && !error && <p>티켓 평가를 불러오는 중입니다.</p>}
+    {current && <article className="training-ticket-evaluation">
       <h3>{current.title}</h3>
       <p>{statuses[current.final_status]} · {current.activity_status === 'ATTEMPTED' ? '대응 기록 있음' : '대응 기록 없음'}</p>
       {current.warnings.length > 0 && <ul>{current.warnings.map((warning, index) => (
         <li key={index}>{warningLabels[warning] ?? warning}</li>
       ))}</ul>}
       <h4>행동 타임라인</h4>
-      <ol>{current.timeline.map(event => <li key={event.id}>{event.sequence} · {date(event.occurred_at)} · {eventLabels[event.type] ?? event.type}
+      {current.timeline.length === 0 && <p>저장된 행동이 없습니다.</p>}
+      <ol className="training-materials">{current.timeline.map(event => <li key={event.id}>{event.sequence} · {date(event.occurred_at)} · {eventLabels[event.type] ?? event.type}
         {event.type === 'virtual_action_performed' && ' · ' + String(event.details.action_code)}
         {event.type === 'training_note' && ' · ' + String(event.details.note)}
       </li>)}</ol>
       <h4>규칙별 판정과 근거</h4>
-      {current.rule_results === null ? <p>준비된 규칙 판정이 없습니다.</p> : <ul>{current.rule_results.map(rule => (
+      {current.rule_results === null ? <p>준비된 규칙 판정이 없습니다.</p> : <ul className="training-materials">{current.rule_results.map(rule => (
         <li key={rule.rule_code}>{ruleLabels[rule.rule_code]} · {verdicts[rule.result]}
           {rule.evidence_refs.map(ref => {
             const evidence = current.evidence.find(item => item.id === ref)
-            return evidence && <a key={ref} className="agent-citation" href={evidence.source_url}>[{evidence.kind === 'handover' ? '확정 인계' : '근거'}]</a>
+            const label = evidence && ({ handover: '확정 인계', event: '행동 기록', work: '후속 작업', sop: 'SOP', incident: '과거 장애', learning: '학습 자료' }[evidence.kind] ?? '근거')
+            return evidence && <a key={ref} className="agent-citation" href={trainingSourceHref(evidence.source_url)}>[{label}]</a>
           })}
         </li>
       ))}</ul>}
@@ -210,6 +263,7 @@ export function TrainingEvaluation({ base }: { base: string }) {
           ['권장 점검', current.feedback.recommendations]] as const).map(([label, points]) => points.length > 0 &&
           <section key={label}><h4>{label}</h4><ul>{points.map(point => <li key={point}>{point}</li>)}</ul></section>)}
       </>}
-    </>}
+      {summary?.explanation_status === 'READY' && !current.feedback && <p>현재 접근할 수 있는 AI 설명이 없습니다.</p>}
+    </article>}
   </section>
 }

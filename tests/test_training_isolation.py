@@ -94,8 +94,11 @@ def test_registration_privilege_cookie_and_safe_default(monkeypatch):
     name = f"Trainee-{uuid4().hex}"
     body = {"username": name, "password": PASS}
     with TestClient(app) as who:
+        capability = request(who, "GET", "/api/v1/auth/registration", 200)
+        assert capability.json() == {"enabled": False} and capability.headers["Cache-Control"] == "no-store"
         request(who, "POST", REGISTER, 404, headers=ORIGIN, json=body)
         monkeypatch.setattr(auth_module, "settings", lambda: replace(settings(), training_registration=True))
+        assert request(who, "GET", "/api/v1/auth/registration", 200).json() == {"enabled": True}
         request(who, "POST", REGISTER, 403, headers={"Origin": "https://invalid.example"}, json=body)
         request(who, "POST", REGISTER, 422, headers=ORIGIN, json={**body, "password": "short"})
         request(who, "POST", REGISTER, 422, headers=ORIGIN, json={**body, "role": "operator"})

@@ -2,6 +2,7 @@
 
 import argparse
 import json
+import ssl
 import statistics
 import time
 from collections import Counter, defaultdict
@@ -14,7 +15,8 @@ import httpx2
 from tests.qa_roster import PASSWORD, USERNAMES
 
 
-def measure(base_url: str, shifts: list[str], *, profile: bool = False) -> dict:
+def measure(base_url: str, shifts: list[str], *, profile: bool = False,
+            extra_handover_reads: int = 0, verify: ssl.SSLContext | bool = True) -> dict:
     timings = defaultdict(list)
     statuses = defaultdict(Counter)
     expected_statuses = {}
@@ -44,7 +46,7 @@ def measure(base_url: str, shifts: list[str], *, profile: bool = False) -> dict:
                                     "http_ms": round(elapsed_ms, 2)})
         return response
 
-    options = dict(base_url=base_url + "/api/v1", timeout=20, trust_env=False)
+    options = dict(base_url=base_url + "/api/v1", timeout=20, trust_env=False, verify=verify)
     with httpx2.Client(**options) as outgoing, httpx2.Client(**options) as incoming:
         login(outgoing, USERNAMES[0])
         login(incoming, USERNAMES[1])
@@ -87,6 +89,7 @@ def measure(base_url: str, shifts: list[str], *, profile: bool = False) -> dict:
             else:
                 raise RuntimeError("Synthetic analysis did not finish within 30 seconds.")
 
+        reports = []
         for index, size in enumerate((1, 5, 20)):
             shift, actor = shifts[index], clients[index % 2]
             preview = checked(actor.get(f"/shift-instances/{shift}/handover-preview"), 200)
@@ -106,6 +109,14 @@ def measure(base_url: str, shifts: list[str], *, profile: bool = False) -> dict:
             checked(recorded(actor, "handover_confirm", "POST", path + "/confirm",
                              json={"expected_version": ready["version"]}), 200)
             recorded(actor, "handover_get", "GET", path)
+            reports.append((actor, path))
+        if extra_handover_reads:
+            with ThreadPoolExecutor(max_workers=5) as pool:
+                def read_handover(index):
+                    actor, path = reports[index % len(reports)]
+                    return recorded(actor, "handover_get_concurrent", "GET", path)
+
+                list(pool.map(read_handover, range(extra_handover_reads)))
 
     result = {
         "provider": "fake", "max_concurrency": 5, "agent_poll_interval_ms": 100,
@@ -127,11 +138,16 @@ if __name__ == "__main__":
     parser.add_argument("--origin", default="http://127.0.0.1:18085")
     parser.add_argument("--shifts", nargs=3, required=True)
     parser.add_argument("--profile", action="store_true", help="Include request IDs for QA timing correlation.")
+    parser.add_argument("--ca", help="Trusted CA file when measuring the isolated loopback TLS staging Nginx.")
+    parser.add_argument("--extra-handover-reads", type=int, default=0, help="Add independent concurrent handover read samples.")
     args = parser.parse_args()
     origin = httpx2.URL(args.origin)
-    if origin.scheme != "http" or origin.host != "127.0.0.1" or origin.port in {80, 8080, None} or origin.path != "/":
+    if (origin.scheme not in {"http", "https"} or (origin.scheme == "https") != bool(args.ca)
+            or origin.host != "127.0.0.1" or origin.port in {80, 443, 8080, None} or origin.path != "/"
+            or str(origin).rstrip("/") != args.origin or not 0 <= args.extra_handover_reads <= 1000):
         parser.error("Use the loopback origin of the isolated Fake QA stack.")
-    report = measure(args.origin, args.shifts, profile=args.profile)
+    report = measure(args.origin, args.shifts, profile=args.profile, extra_handover_reads=args.extra_handover_reads,
+                     verify=ssl.create_default_context(cafile=args.ca) if args.ca else True)
     print(json.dumps(report, indent=2))
     if any(operation["errors"] for operation in report["operations"].values()):
         raise SystemExit(1)
