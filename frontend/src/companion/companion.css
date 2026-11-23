@@ -1,11 +1,16 @@
-.companion-positioner {
+.companion-widget {
   position: fixed;
-  z-index: 1;
+  inset: 0;
+  z-index: 6;
+  pointer-events: none;
+}
+
+.companion-positioner {
+  position: absolute;
   top: 0;
   left: 0;
   width: var(--companion-size, 0px);
   height: var(--companion-size, 0px);
-  pointer-events: none;
 }
 
 .companion-pet {
@@ -23,7 +28,7 @@
   user-select: none;
 }
 
-.companion-pet[data-dragging=true] { cursor: grabbing; }
+.companion-pet:is([data-interaction=holding], [data-interaction=dragging]) { cursor: grabbing; }
 .companion-pet:focus-visible { outline-offset: -3px; }
 
 .companion-hover, .companion-animation, .companion-facing {
@@ -42,8 +47,9 @@
 
 .companion-facing img[hidden] { display: none; }
 .companion-hover { transition: transform 160ms ease-out; }
-.companion-pet:hover .companion-hover { transform: scale(1.035); }
-.companion-pet[data-state=walking][data-direction=left] .companion-facing { transform: scaleX(-1); }
+.companion-pet:hover:where(:not([data-interaction], [data-impact])) .companion-hover { transform: scale(1.035); }
+.companion-pet:is([data-state=walking], [data-interaction=flying])[data-direction=left] .companion-facing,
+.companion-pet[data-impact=left] .companion-facing { transform: scaleX(-1); }
 
 .companion-pet[data-state=idle] .companion-animation { animation: companion-float 4s ease-in-out infinite; }
 .companion-pet[data-state=walking] .companion-animation { animation: companion-step .65s ease-in-out infinite; }
@@ -54,6 +60,46 @@
 .companion-pet[data-state=sleeping] .companion-animation { animation: companion-breathe 5s ease-in-out infinite; }
 .companion-pet[data-state=surprised] .companion-animation { animation: companion-recoil .34s ease-out; }
 
+.companion-pet:is([data-interaction=holding], [data-interaction=dragging]) .companion-animation {
+  transform-origin: var(--companion-grab-x, 50%) 19%;
+  animation: companion-dangle 1.2s ease-in-out infinite;
+}
+
+.companion-pet[data-interaction=flying] .companion-animation {
+  animation: companion-glide 240ms ease-out both;
+}
+
+.companion-pet[data-impact] .companion-animation {
+  --companion-squash: .47, 1.17;
+  --companion-spring: 1.04, .94;
+  animation: companion-wall-impact var(--companion-impact-time) ease-out both;
+}
+
+.companion-pet[data-impact=left] .companion-animation {
+  --companion-wall-offset: -4px, 0;
+  transform-origin: left center;
+}
+
+.companion-pet[data-impact=right] .companion-animation {
+  --companion-wall-offset: 8px, 0;
+  transform-origin: right center;
+}
+
+.companion-pet:is([data-impact=top], [data-impact=bottom]) .companion-animation {
+  --companion-squash: 1.17, .47;
+  --companion-spring: .94, 1.04;
+}
+
+.companion-pet[data-impact=top] .companion-animation {
+  --companion-wall-offset: 0, -7px;
+  transform-origin: center top;
+}
+
+.companion-pet[data-impact=bottom] .companion-animation {
+  --companion-wall-offset: 0, 3px;
+  transform-origin: center bottom;
+}
+
 .companion-pet[data-paused=true] :is(.companion-hover, .companion-animation) {
   animation: none;
   transition: none;
@@ -62,26 +108,78 @@
 
 .companion-hint {
   position: absolute;
-  min-width: min(12rem, 65vw);
-  max-width: min(17rem, 65vw);
-  bottom: calc(100% + 4px);
-  right: 0;
-  margin: 0;
-  padding: .45rem .7rem;
+  width: min(20rem, calc(100vw - 24px));
+  padding: .65rem .8rem;
   border: 1px solid #b7c5d4;
   border-radius: .5rem;
+  box-shadow: 0 4px 18px #14283f26;
   background: #fff;
   color: #182433;
   font-size: .84rem;
   overflow-wrap: anywhere;
 }
 
+.companion-hint p { margin: 0 0 .45rem; max-height: 45vh; overflow-y: auto; }
+.companion-hint button { pointer-events: auto; }
+.companion-hint-actions { display: flex; flex-wrap: wrap; gap: .4rem; }
+.companion-hint-ready { position: absolute; width: 1px; height: 1px; overflow: hidden; clip-path: inset(50%); }
+.companion-pet[data-hint=ready]::after {
+  content: '';
+  position: absolute;
+  top: 12%;
+  right: 8%;
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background: #2b66b6;
+  box-shadow: 0 0 0 3px #e0edff;
+  pointer-events: none;
+}
+.training-layout [data-companion-highlight]:not(:focus-visible) { outline: 2px solid #4276b3; outline-offset: 2px; }
+.companion-debug-hints { display: flex; gap: .35rem; }
+
+.companion-chat {
+  position: absolute;
+  right: 118px;
+  bottom: 46px;
+  display: grid;
+  grid-template-rows: auto minmax(0, 1fr) auto;
+  width: min(25rem, calc(100vw - 2rem));
+  height: min(34rem, calc(100dvh - 110px));
+  border: 1px solid var(--line);
+  border-radius: .8rem;
+  box-shadow: 0 12px 36px #14283f26;
+  background: #fff;
+  color: var(--ink);
+  overflow: hidden;
+  pointer-events: auto;
+}
+.companion-chat-header { display: flex; gap: .65rem; align-items: center; padding: .65rem .85rem; border-bottom: 1px solid var(--line); }
+.companion-chat-header img { width: 36px; height: 36px; object-fit: contain; }
+.companion-chat-header div { flex: 1; min-width: 0; }
+.companion-chat-header h2 { font-size: 1rem; margin: 0; }
+.companion-chat-header p { margin: 0; color: var(--muted); font-size: .78rem; overflow-wrap: anywhere; }
+.companion-chat-log { min-height: 0; overflow: auto; padding: .8rem; background: var(--canvas); }
+.companion-chat-turn { margin-bottom: .9rem; overflow-wrap: anywhere; }
+.companion-chat-turn > .meta { margin: 0 0 .25rem; }
+.companion-chat-question { background: #e8effc; border-radius: .5rem; padding: .45rem .65rem; white-space: pre-wrap; margin-bottom: .5rem; }
+.companion-chat-answer { padding: .55rem .65rem; border: 1px solid var(--line); border-radius: .5rem; background: #fff; }
+.companion-chat-answer :is(p, ul, ol, pre) { margin: .25rem 0 .6rem; }
+.companion-chat-answer :last-child { margin-bottom: 0; }
+.companion-chat-answer pre { padding: .55rem; background: var(--canvas); overflow-x: auto; }
+.companion-chat-form { padding: .6rem .8rem; gap: .4rem; border-top: 1px solid var(--line); }
+.companion-chat-form > div { display: flex; justify-content: space-between; }
+.companion-chat-form textarea { resize: vertical; max-height: 20vh; }
+.companion-chat :is(button, .notice) { font-size: .8rem; }
+.companion-chat .notice { margin: .25rem .5rem; }
+@media (max-width: 620px) { .companion-chat { right: 12px; bottom: 46px; } }
+
 .companion-settings {
-  position: fixed;
-  z-index: 4;
+  position: absolute;
   right: 12px;
   bottom: 12px;
   font-size: .78rem;
+  pointer-events: auto;
 }
 
 .companion-settings summary {
@@ -151,6 +249,23 @@
 @keyframes companion-recoil {
   25% { transform: translateX(-2px) rotate(-2deg); }
   65% { transform: translateX(2px) rotate(2deg); }
+}
+
+@keyframes companion-dangle {
+  0%, 100% { transform: translateY(3px) rotate(0deg) scale(.96, 1.08); }
+  25% { transform: translateY(5px) rotate(-10deg) scale(.93, 1.11); }
+  75% { transform: translateY(5px) rotate(9deg) scale(.93, 1.11); }
+}
+
+@keyframes companion-glide {
+  0% { transform: rotate(var(--companion-flight-angle)) scale(1.22, .82) rotate(calc(-1 * var(--companion-flight-angle))); }
+  100% { transform: rotate(var(--companion-flight-angle)) scale(1.1, .93) rotate(calc(-1 * var(--companion-flight-angle))); }
+}
+
+@keyframes companion-wall-impact {
+  0%, 100% { transform: scale(1); }
+  23% { transform: translate(var(--companion-wall-offset)) scale(var(--companion-squash)); }
+  65% { transform: scale(var(--companion-spring)); }
 }
 
 @media (prefers-reduced-motion: reduce) {

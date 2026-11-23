@@ -5,6 +5,7 @@ import type { Session, Ticket } from './api'
 import { displayDate, shiftLabel, TicketHistory, workStatuses } from './handover'
 import type { Event, Shift, Work } from './handover'
 import { ErrorNotice, Feedback } from './ui'
+import { useCompanionPart } from './companion/companion-context'
 
 interface Operator { id: string; name: string; team_ids: string[] }
 interface IncomingHandover { summary: string; tickets: { ticket_id: string }[] }
@@ -37,12 +38,19 @@ export function TicketOperations({ ticket, session, onVersion, trainingPath = ''
   const [shiftId, setShiftId] = useState('')
   const [ownerId, setOwnerId] = useState('')
   const [editing, setEditing] = useState<Work | 'new' | null>(null)
+  const [workDirty, setWorkDirty] = useState(false)
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState('')
   const [saved, setSaved] = useState('')
   const path = trainingPath + '/tickets/' + ticket.id
   const team = shifts.find(shift => shift.id === shiftId)?.team_id
   const locked = readOnly || !!ticket.archived_at
+  useCompanionPart('work', trainingPath ? { editing: workDirty && !locked } : undefined)
+
+  function editWork(work: Work | 'new' | null) {
+    setWorkDirty(false)
+    setEditing(work)
+  }
 
   useEffect(() => {
     if (!trainingPath) return
@@ -85,7 +93,7 @@ export function TicketOperations({ ticket, session, onVersion, trainingPath = ''
         method, body: JSON.stringify({ expected_version: data.version, ...payload }),
       }, session.csrf_token)
       setData(result)
-      setEditing(null)
+      editWork(null)
       onVersion(result.version)
       if (trainingPath) setSaved(endpoint === '/operations' ? '업무 정보를 저장했습니다.' : '작업 기록을 저장했습니다.')
     } catch (failure) { setError(errorMessage(failure)) }
@@ -122,7 +130,7 @@ export function TicketOperations({ ticket, session, onVersion, trainingPath = ''
         <div><dt>담당자</dt><dd>{roster.find(user => user.id === data.owner_id)?.name || '미지정'}</dd></div>
         <div><dt>주의사항</dt><dd>{data.warnings || '미기록'}</dd></div>
         <div><dt>추가 승인</dt><dd>{data.approval_required === null ? '미확인' : data.approval_required ? '필요' : '해당 없음'}</dd></div>
-      </dl> : <form onSubmit={saveOperations} key={data.version}>
+      </dl> : <form onSubmit={saveOperations} onChange={trainingPath ? () => setWorkDirty(true) : undefined} key={data.version}>
         <div className="fields">
           {!trainingPath && <label>담당 근무 회차<select value={shiftId} onChange={event => { setShiftId(event.target.value); setOwnerId('') }}>
             <option value="">미배정</option>
@@ -148,11 +156,12 @@ export function TicketOperations({ ticket, session, onVersion, trainingPath = ''
             <span>{trainingPath && work.status !== 'done' ? '인수 후 배정'
               : roster.find(user => user.id === work.owner_id)?.name || '담당 미지정'}</span>
             {!trainingPath && work.due_at && <span>{displayDate(work.due_at)} KST</span>}
-            {!locked && <button className="secondary" disabled={busy} onClick={() => setEditing(work)}>작업 수정</button>}
+            {!locked && <button className="secondary" disabled={busy} onClick={() => editWork(work)}>작업 수정</button>}
           </div>
           {work.note && <p className="knowledge-text">{work.note}</p>}
         </li>)}</ul>
-  const workForm = !locked && editing && <form className="handover-actions" onSubmit={saveTask} key={task?.id || 'new'}>
+  const workForm = !locked && editing && <form className="handover-actions" onSubmit={saveTask}
+    onChange={trainingPath ? () => setWorkDirty(true) : undefined} key={task?.id || 'new'}>
           <div className="fields">
             <label>작업명<input name="title" maxLength={160} defaultValue={task?.title} required placeholder="예: 스토리지 응답 지연 재확인" /></label>
             <label>작업 상태<select name="status" defaultValue={task?.status || (ticket.status === 'closed' ? 'done' : 'todo')}>
@@ -169,9 +178,9 @@ export function TicketOperations({ ticket, session, onVersion, trainingPath = ''
               placeholder="예: 대기열과 응답 시간을 비교해 지연이 지속되는지 기록" defaultValue={task?.note || ''} /></label>
           </div>
           <div className="row"><button disabled={busy}>작업 저장</button>
-            <button type="button" className="secondary" disabled={busy} onClick={() => setEditing(null)}>취소</button></div>
+            <button type="button" className="secondary" disabled={busy} onClick={() => editWork(null)}>취소</button></div>
         </form>
-  const addWork = !locked && !editing && <button className="secondary" disabled={busy} onClick={() => setEditing('new')}>후속 작업 추가</button>
+  const addWork = !locked && !editing && <button className="secondary" disabled={busy} onClick={() => editWork('new')}>후속 작업 추가</button>
   const completed = data?.work.filter(work => work.status === 'done') ?? []
   const pending = data?.work.filter(work => work.status !== 'done') ?? []
   return <section className="surface">

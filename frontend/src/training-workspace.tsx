@@ -5,6 +5,7 @@ import type { Run as Analysis } from './agent'
 import { api, ApiError, errorMessage, statuses } from './api'
 import type { Session, SimulationStatus, Status, Ticket } from './api'
 import { TicketOperations } from './ticket-operations'
+import { useCompanionPart } from './companion/companion-context'
 import { TrainingEvaluation, TrainingHandover } from './training-evaluation'
 import { trainingSourceHref } from './training-source'
 import { Badge, Feedback, Priority, TicketStatus } from './ui'
@@ -65,7 +66,9 @@ function useResource<T>(path: string, revision = 0) {
   const [error, setError] = useState('')
   useEffect(() => {
     const controller = new AbortController()
-    api<T>(path, { signal: controller.signal }).then(result => { setData(result); setError('') })
+    api<T>(path, { signal: controller.signal }).then(result => {
+      if (!controller.signal.aborted) { setData(result); setError('') }
+    })
       .catch(failure => { if (!controller.signal.aborted) setError(errorMessage(failure)) })
     return () => controller.abort()
   }, [path, revision])
@@ -88,6 +91,7 @@ function useSectionFocus(ready: boolean) {
 export function TrainingWorkspace({ runId, ticketId, session }: { runId: string; ticketId?: string; session: Session }) {
   const base = '/simulation-runs/' + runId
   const { data: run, error } = useResource<Run>(base)
+  useCompanionPart('run', { phase: error ? 'error' : run ? 'ready' : 'loading', status: run?.status, scenario: run?.scenario.key })
   return <>
     <nav className="training-nav training-breadcrumbs" aria-label="실습 탐색">
       {run && <a href={base + '/sops'}>SOP 목록</a>}{ticketId && <>
@@ -113,6 +117,8 @@ function Overview({ base, run, session }: { base: string; run: Run; session: Ses
     (!search || [ticket.number, ticket.title, ticket.service].some(value => value.toLocaleLowerCase().includes(search))))
   const current = schedule.data?.slots[1]
   const completed = run.status === 'COMPLETED'
+  useCompanionPart('tickets', { phase: tickets.error ? 'error' : !tickets.data ? 'loading' : tickets.data.items.length ? 'ready' : 'empty' })
+  useCompanionPart('incoming', { phase: incoming.error ? 'error' : !incoming.data ? 'loading' : incoming.data.tickets.length ? 'ready' : 'empty' })
   useSectionFocus(true)
   return <>
     <div className="training-hero"><div>
@@ -179,11 +185,14 @@ function TicketWorkspace({ base, ticketId, run, session }: { base: string; ticke
   const ticket = useResource<TrainingTicket>(path, latestVersion)
   const hosts = useResource<{ items: RunHost[] }>(base + '/hosts', latestVersion)
   const incidents = useResource<{ incidents: Incident[]; host: { hostname: string; host_key: string } | null }>(path + '/host-incidents')
+  const host = hosts.data?.items.find(item => item.id === ticket.data?.scenario_host_id)
+  useCompanionPart('ticket', { phase: ticket.error ? 'error' : ticket.data ? 'ready' : 'loading', id: ticketId,
+    number: ticket.data?.number, status: ticket.data?.status, severity: ticket.data?.severity,
+    origin: ticket.data?.training_origin, kind: host?.state.asset_kind })
   useSectionFocus(!!ticket.data)
   if (ticket.error) return <p role="alert">{ticket.error}</p>
   if (!ticket.data) return <p role="status">티켓을 불러오는 중입니다.</p>
   const current = { ...ticket.data, version: Math.max(ticket.data.version, latestVersion) }
-  const host = hosts.data?.items.find(item => item.id === current.scenario_host_id)
   const asset = host?.state.asset_kind
   const health = host?.state.health
   const errorCode = host?.state.error_code
@@ -354,23 +363,34 @@ function Knowledge({ base, ticketId, session, readOnly = false, initialQuery = '
   const [hits, setHits] = useState<Hit[]>()
   const [error, setError] = useState('')
   const [pending, setPending] = useState(false)
+  const [submitted, setSubmitted] = useState<{ kind: 'sop' | 'case'; request: number }>()
+  const request = useRef<AbortController | null>(null)
+  useEffect(() => () => request.current?.abort(), [])
+  useCompanionPart('search', submitted && { ...submitted, phase: error ? 'error' : pending || !hits ? 'loading' : hits.length ? 'ready' : 'empty' })
   async function search(event: FormEvent<HTMLFormElement>) {
     event.preventDefault()
     const input = new FormData(event.currentTarget)
     const kind = input.get('kind')
+    request.current?.abort()
+    const controller = new AbortController()
+    request.current = controller
+    setSubmitted(previous => ({ kind: kind === 'SOP' ? 'sop' : 'case', request: (previous?.request ?? 0) + 1 }))
     setError('')
     setHits(undefined)
     setPending(true)
     try {
       const response = await api<{ results: Hit[] }>(base + '/knowledge/search', {
-        method: 'POST', body: JSON.stringify({
+        method: 'POST', signal: controller.signal, body: JSON.stringify({
           query: input.get('query'), source_types: kind === 'SOP' ? ['SOP'] : ticketId ? ['TICKET', 'INCIDENT'] : ['TICKET'],
           ticket_id: ticketId,
         }),
       }, session.csrf_token)
-      setHits(response.results)
-    } catch (failure) { setError(errorMessage(failure)) }
-    finally { setPending(false) }
+      if (!controller.signal.aborted) setHits(response.results)
+    } catch (failure) {
+      if (!controller.signal.aborted) setError(errorMessage(failure))
+    } finally {
+      if (!controller.signal.aborted) setPending(false)
+    }
   }
   return <section id="knowledge" className="surface" tabIndex={-1}>
     <h2>SOP·유사 장애 검색</h2>
@@ -380,7 +400,7 @@ function Knowledge({ base, ticketId, session, readOnly = false, initialQuery = '
         <select id="training-source-kind" name="kind"><option value="SOP">승인 SOP</option><option value="CASE">유사 장애</option></select></div>
       <label>검색어<input name="query" maxLength={300} required defaultValue={initialQuery.replace(/\s+/g, ' ').trim().slice(0, 300)}
         placeholder="예: 메모리 ECC 오류 재진단" /></label>
-      <button disabled={pending}>{pending ? '검색 중…' : '검색'}</button>
+      <button disabled={pending} data-companion-anchor="search-sop">{pending ? '검색 중…' : '검색'}</button>
     </form>
     {pending && <p role="status">검색 중입니다.</p>}
     {hits && (hits.length ? <><p role="status">검색 후보 {hits.length}건입니다. 판단에 사용하기 전에 실제 증상과 출처를 비교하세요.</p>
@@ -458,6 +478,11 @@ function TrainingAnalysis({ base, path, session, readOnly }: { base: string; pat
   const [error, setError] = useState('')
   const [pending, setPending] = useState(false)
   const active = !!analysisId && (!analysis || ['queued', 'running'].includes(analysis.status))
+  const status = analysis?.run_id === analysisId ? analysis?.status : undefined
+  useCompanionPart('analysis', (analysisId || pending || error) ? {
+    id: analysisId ?? undefined,
+    phase: error || status === 'failed' ? 'error' : status === 'succeeded' && analysis?.result ? 'ready' : 'loading',
+  } : undefined)
   useEffect(() => {
     if (!analysisId) return
     const controller = new AbortController()

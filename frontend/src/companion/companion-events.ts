@@ -8,7 +8,8 @@ export type CompanionPosition = { x: number; y: number }
 export type CompanionCommand =
   | { type: 'state'; state: CompanionState }
   | { type: 'hint'; text: string }
-  | { type: 'chat' }
+  | { type: 'hint-request' | 'hint-dismiss' }
+  | { type: 'chat'; hintId?: string }
   | { type: 'move'; position: CompanionPosition }
 
 export const companionCommandEvent = 'dco:companion-command'
@@ -17,7 +18,7 @@ export const companionChatRequestedEvent = 'dco:companion-chat-requested'
 declare global {
   interface WindowEventMap {
     [companionCommandEvent]: CustomEvent<CompanionCommand>
-    [companionChatRequestedEvent]: CustomEvent<void>
+    [companionChatRequestedEvent]: CustomEvent<{ hintId?: string }>
   }
 }
 
@@ -33,8 +34,16 @@ export function showCompanionHint(text: string) {
   send({ type: 'hint', text })
 }
 
-export function openCompanionChat() {
-  send({ type: 'chat' })
+export function requestCompanionHint() {
+  send({ type: 'hint-request' })
+}
+
+export function dismissCompanionHint() {
+  send({ type: 'hint-dismiss' })
+}
+
+export function openCompanionChat(hintId?: string) {
+  send({ type: 'chat', hintId })
 }
 
 /** Move the top-left corner of the companion to viewport coordinates in CSS pixels. */

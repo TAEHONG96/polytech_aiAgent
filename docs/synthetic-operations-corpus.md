@@ -49,6 +49,17 @@ corpus run --rm --no-deps -T test python -m pytest -q tests/test_corpus_actions.
 
 실습 종료 후 `corpus stop`으로 전용 서비스만 정지한다. 같은 명령으로 다음에 기동하면 데이터를 다시 사용할 수 있다.
 
+### 키로 채팅의 Gemini 확인
+
+기본 코퍼스는 Fake 공급자를 사용하며 키로 패널에 **모의 응답**을 표시한다. 실제 호출은 Gemini 접근 권한이 있는 별도의 합성 코퍼스에서 확인한다. Fake로 합성 문서 적재를 완료한 뒤 같은 스택의 마지막 Compose 파일로 `compose.corpus-gemini.yaml`을 추가한다. `GEMINI_API_KEY`를 실행 환경에서 제공하면 Compose는 키를 워커에만 전달한다.
+
+```bash
+corpus -f compose.corpus-gemini.yaml up -d --build --wait nginx worker
+corpus -f compose.corpus-gemini.yaml exec -T worker python -m app.knowledge.demo --reindex
+```
+
+색인 재생성이 끝나면 합성 티켓의 키로 채팅으로 질문하고 `provider`가 `gemini`인지, 근거 링크가 해당 실습의 승인 SOP로 연결되는지 확인한다. Fake와 Gemini의 임베딩 검색 프로필은 다르다. Fake로 전환할 때도 전환한 공급자로 색인을 다시 생성한다.
+
 ## Cloudflare Tunnel에서 공개 실습 가입
 
 [공개 터널 설정](PUBLIC_DEMO.md)을 따라 실습 전용 환경 파일 `.env.corpus-public`을 만든다. 기존 코퍼스 볼륨을 재사용하려면 처음 적재할 때 사용한 DB 계정·비밀번호를 같은 파일에 설정한다. `APP_ORIGIN`에는 공개 HTTPS 주소를 넣고 `CORPUS_NGINX_TARGET=training-tunnel`, `APP_PUBLIC_TRAINING_REGISTRATION=1`을 지정한다. 앞 절의 `corpus stop`으로 루프백 구성을 정지한 다음 같은 Compose 프로젝트를 아래 조합으로 시작한다.

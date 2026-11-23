@@ -65,6 +65,10 @@ class FakeGenerator:
 
     async def generate(self, contents: list[types.Content], config: types.GenerateContentConfig):
         request = json.loads(contents[0].parts[0].text)
+        if request.get("purpose") == "companion_chat":
+            from app.companion.service import fake_response
+
+            return fake_response(request)
         if request.get("purpose") == "handover":
             from app.handover.analysis import fake_response
 

@@ -1,7 +1,9 @@
 import { companionChatRequestedEvent } from './companion-events'
 import type { CompanionCommand, CompanionPosition, CompanionState } from './companion-events'
-import { clampPosition, distance, nearbyDestination, walkDuration, walkPosition } from './companion-movement'
-import type { MovementArea } from './companion-movement'
+import { clampPosition, distance, flightStep, nearbyDestination, throwMotion, walkDuration, walkPosition } from './companion-movement'
+import type { MovementArea, Wall } from './companion-movement'
+import { hintWaitMs } from './companion-hints'
+import type { ActiveCompanionHint, CompanionHint } from './companion-hints'
 
 const behavior = {
   idleMin: 8_000,
@@ -23,15 +25,18 @@ const reducedMotionQuery = '(prefers-reduced-motion: reduce)'
 export type CompanionView = {
   state: CompanionState
   direction: 'left' | 'right'
-  hint?: string
-  dragging: boolean
+  activeHint?: ActiveCompanionHint
+  interaction: 'holding' | 'dragging' | 'flying' | null
+  flightAngle?: number
+  impact?: Wall
   hidden: boolean
   paused: boolean
   preview: CompanionState | null
+  chatOpen: boolean
 }
 
 export const initialCompanionView: CompanionView = {
-  state: 'idle', direction: 'right', dragging: false, hidden: false, paused: false, preview: null,
+  state: 'idle', direction: 'right', interaction: null, hidden: false, paused: false, preview: null, chatOpen: false,
 }
 
 type SavedCompanion = Pick<CompanionView, 'direction' | 'hidden' | 'paused'> & {
@@ -68,6 +73,8 @@ type Walk = {
   relocate: boolean
 }
 
+type Flight = { velocity: CompanionPosition; elapsed: number; lastFrame: number }
+
 export function createCompanionController({ readArea, render, place }: {
   readArea: () => MovementArea
   render: (view: CompanionView) => void
@@ -84,13 +91,13 @@ export function createCompanionController({ readArea, render, place }: {
     ...savedPreferences(saved),
   }
   let walk: Walk | undefined
+  let flight: Flight | undefined
   let frame: number | undefined
   let timer: number | undefined
   let reactionEndsAt: number | undefined
   let idleCheckAt = 0
   let lastActivity = performance.now()
   let hovered = false
-  let pointing = false
   let disposed = false
 
   function save() {
@@ -117,11 +124,23 @@ export function createCompanionController({ readArea, render, place }: {
     window.cancelAnimationFrame(frame ?? 0)
     frame = undefined
     if (walk) walk.lastFrame = undefined
+    if (flight) flight.lastFrame = performance.now()
   }
 
-  function stopWalk() {
+  function stopTravel() {
     cancelFrame()
     walk = undefined
+    flight = undefined
+  }
+
+  function interruptTravel() {
+    const wasFlying = Boolean(flight)
+    stopTravel()
+    if (wasFlying) {
+      anchor = position
+      update({ interaction: null, flightAngle: undefined })
+      save()
+    }
   }
 
   function recordActivity() {
@@ -132,24 +151,46 @@ export function createCompanionController({ readArea, render, place }: {
     idleCheckAt = performance.now() + behavior.idleMin + Math.random() * (behavior.idleMax - behavior.idleMin)
   }
 
-  function enter(state: CompanionState, duration?: number, hint?: string) {
+  function enter(state: CompanionState, duration?: number, impact?: Wall) {
     reactionEndsAt = duration === undefined ? undefined : performance.now() + duration
-    update({ state, hint })
+    update({ state, impact })
     if (state === 'idle') delayIdleCheck()
     schedule()
   }
 
-  function canWalk() {
-    return !disposed && !document.hidden && !view.hidden && !view.paused && !motion.matches && !hovered && !pointing
+  function isHeld() {
+    return view.interaction === 'holding' || view.interaction === 'dragging'
+  }
+
+  function canAnimate() {
+    return !disposed && !document.hidden && !view.hidden && !view.paused && !view.chatOpen && !motion.matches && !isHeld()
   }
 
   function requestFrame() {
-    if (walk && canWalk() && frame === undefined) frame = window.requestAnimationFrame(step)
+    if (frame === undefined && canAnimate() && (flight || (walk && !hovered))) {
+      frame = window.requestAnimationFrame(step)
+    }
   }
 
   function step(now: number) {
     frame = undefined
-    if (!walk || !canWalk()) return
+    if (!canAnimate()) return
+    if (flight) {
+      const elapsed = Math.max(0, Math.min(40, now - flight.lastFrame))
+      const next = flightStep(position, flight.velocity, elapsed, area.bounds)
+      flight.elapsed += elapsed
+      flight.lastFrame = now
+      flight.velocity = next.velocity
+      setPosition(next.position)
+      if (next.wall || flight.elapsed >= throwMotion.maxDuration
+        || Math.hypot(next.velocity.x, next.velocity.y) < throwMotion.settleSpeed) {
+        finishFlight(next.wall)
+      } else {
+        requestFrame()
+      }
+      return
+    }
+    if (!walk || hovered) return
     walk.elapsed += now - (walk.lastFrame ?? now)
     walk.lastFrame = now
     const progress = Math.min(1, walk.elapsed / walk.duration)
@@ -161,8 +202,14 @@ export function createCompanionController({ readArea, render, place }: {
     }
   }
 
+  function finishFlight(wall?: Wall) {
+    interruptTravel()
+    if (wall) enter('surprised', throwMotion.impactDuration, wall)
+    else enter('idle')
+  }
+
   function finishWalk(relocate: boolean) {
-    stopWalk()
+    stopTravel()
     if (relocate) anchor = position
     save()
     enter('idle')
@@ -170,7 +217,7 @@ export function createCompanionController({ readArea, render, place }: {
 
   function startWalk(destination: CompanionPosition, relocate = false) {
     const target = clampPosition(destination, area.bounds)
-    stopWalk()
+    stopTravel()
     if (view.paused || motion.matches || distance(position, target) < 1) {
       setPosition(target)
       finishWalk(relocate)
@@ -194,10 +241,11 @@ export function createCompanionController({ readArea, render, place }: {
     if (disposed || document.hidden || view.hidden) return
     const now = performance.now()
     if (reactionEndsAt !== undefined && now >= reactionEndsAt) {
-      enter('idle')
+      if (view.activeHint) dismissHint()
+      else enter(view.chatOpen ? 'chatting' : 'idle')
       return
     }
-    if (view.state === 'idle' && !view.preview && !pointing && !hovered && !view.paused) {
+    if (view.state === 'idle' && !view.chatOpen && !view.preview && !isHeld() && !hovered && !view.paused) {
       if (now - lastActivity >= behavior.sleepAfter) {
         enter('sleeping')
         return
@@ -214,7 +262,7 @@ export function createCompanionController({ readArea, render, place }: {
     window.clearTimeout(timer)
     timer = undefined
     if (disposed || document.hidden || view.hidden) return
-    const idle = view.state === 'idle' && !view.preview && !pointing && !hovered && !view.paused
+    const idle = view.state === 'idle' && !view.chatOpen && !view.preview && !isHeld() && !hovered && !view.paused
     const sleepAt = lastActivity + behavior.sleepAfter
     const due = reactionEndsAt ?? (idle ? Math.min(motion.matches ? Infinity : idleCheckAt, sleepAt) : undefined)
     if (due !== undefined) timer = window.setTimeout(tick, Math.max(0, Math.ceil(due - performance.now())))
@@ -233,27 +281,32 @@ export function createCompanionController({ readArea, render, place }: {
 
   function syncVisibility() {
     if (document.hidden) cancelFrame()
+    else {
+      if (flight) flight.lastFrame = performance.now()
+      if (view.activeHint?.mode === 'ready' && hintExpired()) dismissHint()
+    }
     requestFrame()
     schedule()
   }
 
   function restorePage(event: PageTransitionEvent) {
     if (!event.persisted) return
+    dismissHint()
     const restored = restore()
     if (!validPosition(restored.position)) return
-    stopWalk()
-    pointing = false
+    stopTravel()
     hovered = false
     area = readArea()
     setPosition(restored.position)
     anchor = clampPosition(validPosition(restored.anchor) ? restored.anchor : position, area.bounds)
-    update({ ...savedPreferences(restored), preview: null, dragging: false })
+    update({ ...savedPreferences(restored), activeHint: undefined, preview: null, interaction: null, flightAngle: undefined })
     recordActivity()
     enter('idle')
   }
 
   function syncMotion() {
-    if (motion.matches && walk) finishWalk(walk.relocate)
+    if (motion.matches && flight) finishFlight()
+    else if (motion.matches && walk) finishWalk(walk.relocate)
     schedule()
   }
 
@@ -261,46 +314,99 @@ export function createCompanionController({ readArea, render, place }: {
     if (hovered === next) return
     hovered = next
     recordActivity()
-    if (hovered) cancelFrame()
+    if (hovered && !flight) cancelFrame()
     if (!hovered && view.state === 'idle') delayIdleCheck()
     requestFrame()
     schedule()
   }
 
   function beginPointer() {
-    pointing = true
-    stopWalk()
+    interruptTravel()
     recordActivity()
-    if (view.preview) update({ preview: null })
-    if (view.state === 'walking' || view.state === 'sleeping') enter('idle')
-    schedule()
+    update({ interaction: 'holding', preview: null })
+    if (!view.activeHint && !view.chatOpen) enter('idle')
     return position
   }
 
   function dragTo(next: CompanionPosition) {
-    if (!view.dragging) {
-      update({ dragging: true })
-      enter('surprised', reactionDuration.surprised)
+    if (!isHeld()) return
+    if (view.interaction !== 'dragging') {
+      update({ interaction: 'dragging', activeHint: undefined })
+      if (!view.chatOpen) enter('surprised')
     }
     setPosition(next)
   }
 
-  function endPointer() {
-    pointing = false
+  function endPointer(velocity?: CompanionPosition) {
+    if (!isHeld()) return
+    const dragged = view.interaction === 'dragging'
+    update({ interaction: null })
     recordActivity()
-    if (view.dragging) {
-      anchor = position
-      update({ dragging: false })
-      save()
+    if (view.chatOpen) {
+      if (dragged) { anchor = position; save() }
+      return
     }
-    if (view.state === 'idle') delayIdleCheck()
-    schedule()
+    if (!dragged) {
+      if (!view.activeHint) enter('idle')
+      return
+    }
+    anchor = position
+    save()
+    if (velocity && canAnimate()) {
+      flight = { velocity, elapsed: 0, lastFrame: performance.now() }
+      update({
+        interaction: 'flying',
+        flightAngle: Math.atan2(velocity.y, velocity.x) * 180 / Math.PI,
+        direction: velocity.x === 0 ? view.direction : velocity.x < 0 ? 'left' : 'right',
+      })
+      enter('surprised')
+      requestFrame()
+    } else {
+      enter('surprised', reactionDuration.surprised)
+    }
+  }
+
+  function hintExpired() {
+    return reactionEndsAt !== undefined && performance.now() >= reactionEndsAt
+  }
+
+  function offerHint(hint: CompanionHint) {
+    if (view.hidden || view.paused || view.chatOpen || view.interaction || view.preview || document.hidden) return false
+    if (view.activeHint?.mode === 'ready' && hintExpired()) dismissHint()
+    const active = view.activeHint
+    if (active && (active.mode === 'open' || active.hint.priority >= hint.priority)) return false
+    interruptTravel()
+    update({ activeHint: { hint, mode: 'ready' } })
+    enter('hint', hintWaitMs)
+    return true
+  }
+
+  function dismissHint() {
+    if (!view.activeHint) return
+    update({ activeHint: undefined })
+    enter('idle')
+  }
+
+  function activate() {
+    if (view.hidden || isHeld()) return
+    const active = view.activeHint
+    if (!active) {
+      command({ type: 'chat' })
+    } else if (active.mode === 'ready') {
+      if (hintExpired()) dismissHint()
+      else {
+        recordActivity()
+        update({ activeHint: { ...active, mode: 'open' } })
+        enter('hint')
+      }
+    }
   }
 
   function command(action: CompanionCommand) {
-    if (view.hidden || pointing) return
+    if (view.hidden || isHeld() || view.activeHint) return
+    if (view.chatOpen && action.type !== 'chat') return
     if (action.type === 'move' && !validPosition(action.position)) return
-    stopWalk()
+    interruptTravel()
     recordActivity()
     if (view.preview) update({ preview: null })
     switch (action.type) {
@@ -308,11 +414,8 @@ export function createCompanionController({ readArea, render, place }: {
         startWalk(action.position, true)
         break
       case 'chat':
-        enter('chatting', reactionDuration.chatting)
-        window.dispatchEvent(new CustomEvent(companionChatRequestedEvent))
-        break
-      case 'hint':
-        enter('hint', reactionDuration.hint, action.text)
+        if (!view.chatOpen) enter('chatting', reactionDuration.chatting)
+        window.dispatchEvent(new CustomEvent(companionChatRequestedEvent, { detail: { hintId: action.hintId } }))
         break
       case 'state':
         if (action.state === 'walking') {
@@ -324,9 +427,19 @@ export function createCompanionController({ readArea, render, place }: {
     }
   }
 
+  function setChatPhase(phase: 'chatting' | 'thinking' | 'happy' | 'surprised' | null) {
+    if (!phase && !view.chatOpen) return
+    interruptTravel()
+    dismissHint()
+    update({ chatOpen: phase !== null, preview: null })
+    const duration = phase === 'happy' || phase === 'surprised' ? reactionDuration[phase] : undefined
+    enter(phase ?? 'idle', duration)
+  }
+
   function preview(state: CompanionState | null) {
-    if (view.hidden || pointing) return
-    stopWalk()
+    if (view.hidden || isHeld()) return
+    dismissHint()
+    interruptTravel()
     update({ preview: state })
     recordActivity()
     enter(state ?? 'idle')
@@ -334,11 +447,14 @@ export function createCompanionController({ readArea, render, place }: {
 
   function setPreferences(preferences: Partial<Pick<CompanionView, 'hidden' | 'paused'>>) {
     update(preferences)
+    if (view.hidden || view.paused) dismissHint()
     if (view.hidden) {
-      pointing = false
       hovered = false
-      update({ dragging: false, preview: null })
+      interruptTravel()
+      update({ interaction: null, preview: null })
       finishWalk(false)
+    } else if (view.paused && flight) {
+      finishFlight()
     } else if (view.paused && walk) {
       finishWalk(walk.relocate)
     }
@@ -362,9 +478,10 @@ export function createCompanionController({ readArea, render, place }: {
 
   return {
     syncArea, setHovered, beginPointer, dragTo, endPointer, command, preview, setPreferences,
+    offerHint, dismissHint, activate, setChatPhase, getActiveHint: () => view.activeHint,
     dispose() {
       disposed = true
-      stopWalk()
+      stopTravel()
       window.clearTimeout(timer)
       document.removeEventListener('visibilitychange', syncVisibility)
       window.removeEventListener('pointerdown', recordActivity, true)

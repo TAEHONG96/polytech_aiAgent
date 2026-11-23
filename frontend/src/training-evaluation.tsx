@@ -3,6 +3,7 @@ import type { FormEvent } from 'react'
 import { api, ApiError, errorMessage, statuses } from './api'
 import type { Session, SimulationStatus, Status } from './api'
 import { trainingSourceHref } from './training-source'
+import { useCompanionPart } from './companion/companion-context'
 
 type Warning = { code: string; ticket_id?: string }
 type Draft = {
@@ -65,6 +66,8 @@ export function TrainingHandover({ base, session, status }: { base: string; sess
   const [notice, setNotice] = useState('')
   const [busy, setBusy] = useState(false)
   const receipt = useRef<{ revision: number; key: string } | null>(null)
+  useCompanionPart('handover', { phase: error ? 'error' : draft ? 'ready' : 'loading',
+    status: draft?.status, revision: draft?.revision, dirty })
   useEffect(() => {
     const controller = new AbortController()
     api<Draft>(endpoint, { signal: controller.signal }).then(result => { setDraft(result); setDirty(false); setError(undefined) })

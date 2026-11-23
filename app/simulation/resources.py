@@ -162,6 +162,7 @@ def evidence_allowed(db: Database, run_id: UUID, target: Ticket | None, item: di
 def analysis_detail(analysis_id: UUID, db: Database, run: OwnedRun) -> dict:
     analysis = db.scalar(select(AgentRun).where(
         AgentRun.id == analysis_id, AgentRun.simulation_run_id == run.id, AgentRun.requested_by == run.user_id,
+        AgentRun.companion.is_(None),
     ))
     if analysis is None:
         raise ApiError(404, "AGENT_RUN_NOT_FOUND", "분석 실행을 찾을 수 없습니다.")

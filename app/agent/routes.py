@@ -59,7 +59,7 @@ def queue_analysis(db: Database, user_id: UUID, message: str, ticket_id: UUID | 
             raise
         active = db.scalar(select(AgentRun.id).where(
             AgentRun.requested_by == user_id, AgentRun.status.in_(ACTIVE_RUNS),
-            AgentRun.simulation_run_id == run_id,
+            AgentRun.simulation_run_id == run_id, AgentRun.companion.is_(None),
         ))
         raise ApiError(409, "AGENT_BUSY", "진행 중인 분석을 먼저 확인하세요.",
                        {"run_id": str(active)} if active is not None else None) from exc
@@ -70,7 +70,7 @@ def queue_analysis(db: Database, user_id: UUID, message: str, ticket_id: UUID | 
 def read_run(run_id: UUID, db: Database, user: CurrentUser) -> dict:
     run = db.scalar(select(AgentRun).where(
         AgentRun.id == run_id, AgentRun.requested_by == user.id, AgentRun.handover_id.is_(None),
-        AgentRun.simulation_run_id.is_(None),
+        AgentRun.simulation_run_id.is_(None), AgentRun.companion.is_(None),
     ))
     if run is None:
         raise ApiError(404, "AGENT_RUN_NOT_FOUND", "분석 실행을 찾을 수 없습니다.")

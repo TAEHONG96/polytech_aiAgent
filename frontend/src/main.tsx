@@ -6,6 +6,7 @@ import { createRoot } from 'react-dom/client'
 import { api, ApiError, errorMessage, statuses } from './api'
 import type { Session, Severity, Status, Ticket, TicketPage } from './api'
 import { TrainingPage } from './training'
+import { CompanionContextProvider } from './companion/companion-context'
 import { AgentPage } from './agent'
 import { KnowledgeSearch, SopDetail, SopList } from './knowledge'
 import { HandoverDashboard, HandoverDetail } from './handover'
@@ -387,7 +388,7 @@ function App() {
 
   const trainee = session?.roles.includes('trainee')
   const trainingRun = /^\/simulation-runs\/[\da-f-]{36}(?=\/|$)/i.exec(path)?.[0]
-  if (session && trainee) return <div className="training-layout">
+  if (session && trainee) return <CompanionContextProvider path={path} enabled={session.corpus_training === true}><div className="training-layout">
     <a className="skip-link" href="#main-content">본문으로 이동</a>
     <aside className="training-sidebar">
       <div className="training-brand"><span aria-hidden="true">D</span><div>DCO Ticket Assistant<small>장애 대응 실습</small></div></div>
@@ -414,8 +415,8 @@ function App() {
         </section> : <TrainingPage key={path} path={path} session={session} />}
       </main>
     </div>
-    {session.corpus_training === true && <Suspense fallback={null}><CompanionPet /></Suspense>}
-  </div>
+    {session.corpus_training === true && <Suspense fallback={null}><CompanionPet key={session.user.id} session={session} /></Suspense>}
+  </div></CompanionContextProvider>
 
   return (
     <>

@@ -1,11 +1,12 @@
 import asyncio
 import logging
+import time
 from dataclasses import asdict, dataclass
 from datetime import datetime, timedelta, timezone
 from threading import Event
 from uuid import UUID, uuid4
 
-from sqlalchemy import or_, select
+from sqlalchemy import or_, select, update
 from sqlalchemy.orm import Session
 
 from app.agent.analysis import Trace, Usage, investigate
@@ -41,6 +42,7 @@ class Work:
     handover_id: UUID | None
     handover_version: int | None
     simulation_run_id: UUID | None
+    companion: dict | None = None
 
 
 class RunLost(Exception):
@@ -80,7 +82,7 @@ def claim_run() -> Work | None:
         run.lease_token = uuid4()
         run.lease_expires_at = deadline + timedelta(seconds=20)
         return Work(run.id, run.requested_by, run.ticket_id, run.message, run.lease_token, deadline,
-                    run.handover_id, run.handover_version, run.simulation_run_id)
+                    run.handover_id, run.handover_version, run.simulation_run_id, run.companion)
 
 
 def owned_run(db: Session, work: Work) -> AgentRun:
@@ -121,6 +123,9 @@ async def execute(work: Work, model, usage: Usage) -> dict:
         seconds = (work.deadline - utcnow()).total_seconds()
         if seconds <= 0:
             raise AnalysisFailure("AI_TIMEOUT", "분석 실행 시간이 초과되었습니다.", retryable=True)
+        if work.companion is not None:
+            from app.companion.service import answer_chat
+            return await answer_chat(work, model, usage, seconds=seconds, now=utcnow())
         if work.handover_id is not None:
             with Session(engine()) as db:
                 worker_scope(db, work.requested_by, work.simulation_run_id)
@@ -160,7 +165,8 @@ def process_agent_run(model_factory=generator) -> bool:
     model = None
     try:
         with Session(engine()) as db:
-            worker_scope(db, work.requested_by, work.simulation_run_id)
+            if work.companion is None or work.simulation_run_id is not None:
+                worker_scope(db, work.requested_by, work.simulation_run_id)
             if work.ticket_id is not None:
                 try:
                     ticket_by_id(db, work.ticket_id, run_id=work.simulation_run_id)
@@ -170,7 +176,7 @@ def process_agent_run(model_factory=generator) -> bool:
                 if work.ticket_id is not None:
                     raise PermissionError("Invalid analysis parents")
                 authorized_handover(db, work)
-            elif work.simulation_run_id is not None and work.ticket_id is None:
+            elif work.companion is None and work.simulation_run_id is not None and work.ticket_id is None:
                 raise PermissionError("Invalid training analysis scope")
         model = model_factory()
         with Session(engine()) as db, db.begin():
@@ -182,6 +188,8 @@ def process_agent_run(model_factory=generator) -> bool:
         return True
     except PermissionError:
         failure = AnalysisFailure("AI_UNAUTHORIZED", "더 이상 분석을 실행할 수 없는 계정입니다.")
+    except ApiError:
+        failure = AnalysisFailure("CHAT_CONTEXT_UNAVAILABLE", "현재 업무 데이터에 접근할 수 없습니다.")
     except AnalysisFailure as exc:
         failure = exc
     except Exception as exc:
@@ -206,8 +214,17 @@ def process_agent_run(model_factory=generator) -> bool:
 
 
 def process_agent_queue(stop: Event) -> None:
+    from app.companion.service import CHAT_TTL
+    next_cleanup = 0.0
     while not stop.is_set():
         try:
+            if time.monotonic() >= next_cleanup:
+                next_cleanup = time.monotonic() + 300
+                with Session(engine()) as db, db.begin():
+                    db.execute(update(AgentRun).where(
+                        AgentRun.companion["conversation_id"].astext.is_not(None),
+                        AgentRun.created_at < utcnow() - CHAT_TTL, AgentRun.status.not_in(ACTIVE_RUNS),
+                    ).values(message="", result=None, ticket_id=None, simulation_run_id=None, companion={"expired": True}))
             if process_agent_run():
                 continue
         except Exception as exc:

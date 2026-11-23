@@ -1,6 +1,7 @@
 import { useEffect, useState } from 'react'
 import { api, errorMessage, statuses } from './api'
 import type { Status } from './api'
+import { useCompanionPart } from './companion/companion-context'
 
 const runPath = /^\/simulation-runs\/[\da-f-]{36}/i
 const sourcePath = /^\/(sops\/[\da-f-]{36}|tickets\/[\da-f-]{36}\/incident-sources\/[\da-f-]{36}|outgoing-handover\/revisions\/\d+)$/i
@@ -69,9 +70,10 @@ export function TrainingSource({ path }: { path: string }) {
   const [error, setError] = useState('')
   const incident = path.includes('/incident-sources/')
   const section = incident ? '호스트 과거 장애 · 읽기 전용' : path.includes('/sops/') ? '승인 SOP' : '확정 인계 리비전'
+  useCompanionPart('source', { phase: error ? 'error' : source ? 'ready' : 'loading' })
   useEffect(() => {
     const controller = new AbortController()
-    api<Source>(path, { signal: controller.signal }).then(setSource)
+    api<Source>(path, { signal: controller.signal }).then(result => { if (!controller.signal.aborted) setSource(result) })
       .catch(failure => { if (!controller.signal.aborted) setError(errorMessage(failure)) })
     return () => controller.abort()
   }, [path])

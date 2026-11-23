@@ -103,6 +103,37 @@
 
 조회 응답의 `status`는 `queued`, `running`, `succeeded`, `failed` 중 하나다. `result`는 `summary`, `confirmed_facts`, `hypotheses`, `diagnostic_steps`, `additional_information`, `limitations`, `evidence`를 포함한다. `tool_calls`에는 순서, 도구명, 상태, 검증된 요약, 근거 키와 소요 시간이 표시된다. 실패는 `error.code`, `error.message`, `error.retryable`로 전달된다. [도구와 응답 검증](AGENT.md)
 
+## 키로 컴패니언 채팅
+
+전용 코퍼스의 활성 교육생에게만 제공한다. 변경 요청에는 기존 세션 쿠키와 `X-CSRF-Token`이 필요하다. 접수와 워커 처리에서 실습 소유권, 티켓·SOP·장애·인계·분석의 소속과 공개 범위를 확인한다.
+
+| 메서드와 경로 | 응답 |
+| --- | --- |
+| `POST /companion/chat` | `202` 접수 또는 같은 요청의 기존 상태 |
+| `GET /companion/chat/{conversation_id}` | `200` `{conversation_id, turns}`. 조회 가능한 최근 40개 메시지를 시간순으로 반환 |
+| `DELETE /companion/chat/{conversation_id}` | `204` 본인 대화 초기화. 진행 중인 응답도 취소 |
+
+```json
+{
+  "conversation_id": "99567022-1355-4931-b076-cb8311ada837",
+  "request_id": "f996acb2-13d6-4bba-ae3e-4ec10c2fbddb",
+  "message": "이 장애에서는 무엇부터 확인해야 하나요?",
+  "page_context": {
+    "page_id": "ticket",
+    "section": "analysis",
+    "run_id": "c673dd99-ddb9-4930-9fdf-356e84827d42",
+    "ticket_id": "8b083f2a-81ce-4400-bd70-cf5454bffe54"
+  },
+  "active_hint_id": "TICKET_SELECTED"
+}
+```
+
+`page_context`는 화면에 따라 `sop_id`, `incident_id`, `handover_revision`, `analysis_id`, `search_state`를 함께 받을 수 있다. `home`과 `about`은 실습 식별자가 없는 화면이다. `active_hint_id`는 선택값이며 허용된 화면의 힌트 유형만 적용한다. 메시지는 최대 2,000자다.
+
+각 응답 항목은 `message_id`, `conversation_id`, `request_id`, `message`, `context_info`, `timestamp`, `status`를 제공한다. `status`는 `queued`, `running`, `succeeded`, `failed` 중 하나다. 완료 항목에는 안전하게 표시 가능한 Markdown `answer`, 검증된 `sources`, `provider`, 승인 SOP 검색 상태 `retrieval`(`found`, `empty`, `unavailable`, `not_scoped`)이 포함된다. 실패 항목의 `error`는 `code`, `message`, `retryable`로 구성된다. UI는 `GET`으로 상태를 조회하며 응답 스트리밍은 사용하지 않는다.
+
+같은 대화에서 동일한 `request_id`와 요청 내용으로 재전송하면 기존 결과를 받는다. 같은 ID에 다른 내용을 보내면 `409 CHAT_REQUEST_CONFLICT`다. 진행 중인 질문·분석이 있으면 `409 AGENT_BUSY`, 분당 여덟 건을 초과하면 `429 CHAT_RATE_LIMIT`을 반환한다. 대화 보관 기간은 8시간이다.
+
 ## 인수인계
 
 | 메서드와 경로 | 요청·응답 | 권한·조건 |

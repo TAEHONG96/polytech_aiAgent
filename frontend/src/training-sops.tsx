@@ -1,5 +1,6 @@
 import { useEffect, useState } from 'react'
 import { api, errorMessage } from './api'
+import { useCompanionPart } from './companion/companion-context'
 
 const statusLabels = { PENDING: '색인 대기', PROCESSING: '색인 중', COMPLETED: '검색 가능', FAILED: '색인 실패' }
 
@@ -14,11 +15,12 @@ export function TrainingSopList({ path }: { path: string }) {
   const [page, setPage] = useState<SopPage>()
   const [error, setError] = useState('')
   const [retry, setRetry] = useState(0)
+  useCompanionPart('source', { phase: error ? 'error' : !page ? 'loading' : page.items.length ? 'ready' : 'empty' })
 
   useEffect(() => {
     const controller = new AbortController()
     const endpoint = cursor ? path + '?cursor=' + encodeURIComponent(cursor) : path
-    api<SopPage>(endpoint, { signal: controller.signal }).then(setPage)
+    api<SopPage>(endpoint, { signal: controller.signal }).then(result => { if (!controller.signal.aborted) setPage(result) })
       .catch(failure => { if (!controller.signal.aborted) setError(errorMessage(failure)) })
     return () => controller.abort()
   }, [path, cursor, retry])

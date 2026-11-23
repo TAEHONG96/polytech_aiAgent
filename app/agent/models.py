@@ -38,6 +38,7 @@ class AgentRun(Base):
     model: Mapped[str | None] = mapped_column(String(80))
     result: Mapped[dict | None] = mapped_column(JSONB)
     usage: Mapped[dict | None] = mapped_column(JSONB)
+    companion: Mapped[dict | None] = mapped_column(JSONB(none_as_null=True))
     error_code: Mapped[str | None] = mapped_column(String(50))
     error_message: Mapped[str | None] = mapped_column(String(300))
     retryable: Mapped[bool] = mapped_column(default=False)

@@ -1,0 +1,8 @@
+services:
+  api:
+    environment:
+      AGENT_PROVIDER: gemini
+  worker:
+    environment:
+      AGENT_PROVIDER: gemini
+      GEMINI_API_KEY: ${GEMINI_API_KEY:?Set the Gemini key for the isolated corpus worker}
