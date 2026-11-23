@@ -18,6 +18,7 @@ from app.simulation.access import OwnedRun, WritableRun
 from app.simulation.corpus_actions import SCENARIOS as CORPUS_SCENARIOS, options as corpus_options
 from app.simulation.learning import learning_source
 from app.simulation.models import LearningEvent, Scenario, SimulationRunHost
+from app.simulation.network_actions import NETWORK_SCENARIO, NETWORK_VERSION, network_options
 from app.simulation.routes import StartKey
 from app.tickets import Note, Version, ensure_editable, record_event, ticket_by_id
 
@@ -45,11 +46,14 @@ def rules(db: Database, ticket: Ticket, host: SimulationRunHost) -> dict:
     catalog = scenario.config.get("action_catalog", [])
     asset = host.state.get("asset_kind")
     result = {item["code"]: (item["label"], item["variants"][asset]) for item in catalog if asset in item["variants"]}
-    if scenario.scenario_key in CORPUS_SCENARIOS and scenario.version == "1.0":
+    network_pilot = (scenario.scenario_key, scenario.version) == (NETWORK_SCENARIO, NETWORK_VERSION)
+    if scenario.scenario_key in CORPUS_SCENARIOS and (scenario.version == "1.0" or network_pilot):
         result = {code: (label, {**rule, "repeatable": code != "REPLACE_MEMORY"}) for code, (label, rule) in result.items()}
         if scenario.scenario_key in {"synthetic-ops-major", "synthetic-ops-recovery"} and asset != "incident":
             result.update(corpus_options({**host.state, "asset_kind": "incident"}))
         result.update(corpus_options(host.state))
+        if network_pilot and "network_observations" in host.state:
+            result.update(network_options(host.state))
     return result
 
 
@@ -130,6 +134,7 @@ def perform(ticket_id: UUID, body: ActionInput, key: StartKey, response: Respons
             host.state = {**host.state, **changes}
         event_type = ACTION
         result = {"error_code": host.state.get("error_code"), "health": host.state.get("health"), "message": rule["message"]}
+        result.update({field: rule[field] for field in ("outcome", "observations", "unconfirmed") if field in rule})
 
     ticket.version += 1
     ticket.updated_at = datetime.now(timezone.utc)

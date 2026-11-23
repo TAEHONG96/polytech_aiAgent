@@ -94,12 +94,13 @@ erDiagram
 
 ### `simulation_runs`
 
-`id uuid PK`, `user_id FK users`, `scenario_id FK`, `status text CHECK (ACTIVE, COMPLETED)`, `started_at timestamptz`, `completed_at timestamptz NULL`, `incoming_report_snapshot jsonb`, `start_request_key varchar(128) NOT NULL`. 후속 단계에 확정 보고서와 리비전 FK를 추가한다.
+`id uuid PK`, `user_id FK users`, `scenario_id FK`, `status text CHECK (ACTIVE, PAUSED, COMPLETED)`, `started_at timestamptz`, `completed_at timestamptz NULL`, `incoming_report_snapshot jsonb`, `start_request_key varchar(128) NOT NULL`, `start_paused_run_id uuid NULL`.
 
 - `NOT_STARTED`는 해당 사용자에게 현재 ACTIVE 행이 없는 홈 상태다. 과거 완료 행은 존재할 수 있다.
 - `status='COMPLETED'`이면 `completed_at IS NOT NULL` 및 확정 보고서 참조를 검사.
 - 사용자당 ACTIVE 1개 (partial UNIQUE); `(user_id,start_request_key)` UNIQUE.
-- 실행 생성은 호스트/티켓/리포트 링크 복제와 **원자적 트랜잭션**.
+- 실행 생성은 현재 실행의 선택적 일시정지와 호스트·티켓·인계 링크 복제를 한 트랜잭션에서 처리한다. `start_paused_run_id`는 시작 요청 재전송 시 일시정지 대상을 비교하는 데 사용한다.
+- `PAUSED`는 티켓·행동 로그·인계 초안을 보존한다. 재개는 같은 실행을 `ACTIVE`로 복원하며, 현재 `ACTIVE` 회차가 있다면 함께 전환한다.
 - 완료 후 실행 원본은 변경 불가. 재실습은 신규 실행.
 - 확정 보고서·리비전은 같은 실행의 발신 보고서를 참조한다. 빈 유효 초안의 초기화 시점은 구현에서 정하며 AI 작업에 의존하지 않는다.
 

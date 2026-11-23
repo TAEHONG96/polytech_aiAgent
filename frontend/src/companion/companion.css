@@ -1,0 +1,162 @@
+.companion-positioner {
+  position: fixed;
+  z-index: 1;
+  top: 0;
+  left: 0;
+  width: var(--companion-size, 0px);
+  height: var(--companion-size, 0px);
+  pointer-events: none;
+}
+
+.companion-pet {
+  display: block;
+  width: 100%;
+  height: 100%;
+  padding: 4px;
+  border: 0;
+  background: transparent;
+  color: inherit;
+  border-radius: 20%;
+  cursor: grab;
+  pointer-events: auto;
+  touch-action: none;
+  user-select: none;
+}
+
+.companion-pet[data-dragging=true] { cursor: grabbing; }
+.companion-pet:focus-visible { outline-offset: -3px; }
+
+.companion-hover, .companion-animation, .companion-facing {
+  display: block;
+  width: 100%;
+  height: 100%;
+  pointer-events: none;
+}
+
+.companion-facing img {
+  display: block;
+  width: 100%;
+  height: 100%;
+  object-fit: contain;
+}
+
+.companion-facing img[hidden] { display: none; }
+.companion-hover { transition: transform 160ms ease-out; }
+.companion-pet:hover .companion-hover { transform: scale(1.035); }
+.companion-pet[data-state=walking][data-direction=left] .companion-facing { transform: scaleX(-1); }
+
+.companion-pet[data-state=idle] .companion-animation { animation: companion-float 4s ease-in-out infinite; }
+.companion-pet[data-state=walking] .companion-animation { animation: companion-step .65s ease-in-out infinite; }
+.companion-pet[data-state=hint] .companion-animation { animation: companion-gesture .75s ease-in-out; }
+.companion-pet[data-state=chatting] .companion-animation { animation: companion-pop .38s ease-out; }
+.companion-pet[data-state=thinking] .companion-animation { animation: companion-think 3.6s ease-in-out infinite; }
+.companion-pet[data-state=happy] .companion-animation { animation: companion-bounce .65s ease-in-out; }
+.companion-pet[data-state=sleeping] .companion-animation { animation: companion-breathe 5s ease-in-out infinite; }
+.companion-pet[data-state=surprised] .companion-animation { animation: companion-recoil .34s ease-out; }
+
+.companion-pet[data-paused=true] :is(.companion-hover, .companion-animation) {
+  animation: none;
+  transition: none;
+  transform: none;
+}
+
+.companion-hint {
+  position: absolute;
+  min-width: min(12rem, 65vw);
+  max-width: min(17rem, 65vw);
+  bottom: calc(100% + 4px);
+  right: 0;
+  margin: 0;
+  padding: .45rem .7rem;
+  border: 1px solid #b7c5d4;
+  border-radius: .5rem;
+  background: #fff;
+  color: #182433;
+  font-size: .84rem;
+  overflow-wrap: anywhere;
+}
+
+.companion-settings {
+  position: fixed;
+  z-index: 4;
+  right: 12px;
+  bottom: 12px;
+  font-size: .78rem;
+}
+
+.companion-settings summary {
+  width: max-content;
+  margin-left: auto;
+  padding: .15rem .5rem;
+  border: 1px solid #b7c5d4;
+  border-radius: .35rem;
+  background: #fff;
+  color: #324c68;
+  cursor: pointer;
+}
+
+.companion-settings-panel {
+  position: absolute;
+  right: max(108px, calc(100% + 6px));
+  bottom: 0;
+  display: grid;
+  gap: .45rem;
+  width: max-content;
+  padding: .55rem .7rem;
+  border: 1px solid #b7c5d4;
+  border-radius: .45rem;
+  background: #fff;
+  box-shadow: 0 4px 16px #14283f1a;
+}
+
+.companion-settings-panel label { display: flex; align-items: center; gap: .4rem; font-size: inherit; }
+.companion-settings-panel .companion-preview { display: grid; }
+.companion-settings-panel input { width: auto; margin: 0; }
+
+@media (max-width: 360px) {
+  .companion-settings-panel { right: 0; bottom: calc(100% + 6px); }
+}
+
+@keyframes companion-float {
+  50% { transform: translateY(-3px) rotate(1deg); }
+}
+
+@keyframes companion-step {
+  50% { transform: translateY(-2px); }
+}
+
+@keyframes companion-gesture {
+  35% { transform: rotate(-3deg) translateY(-2px); }
+  65% { transform: rotate(2deg); }
+}
+
+@keyframes companion-pop {
+  35% { transform: scale(1.07); }
+}
+
+@keyframes companion-think {
+  45% { transform: translateY(-2px) rotate(-2deg); }
+  72% { transform: translateY(-1px) rotate(1deg); }
+}
+
+@keyframes companion-bounce {
+  40% { transform: translateY(-5px) scale(1.025); }
+  72% { transform: translateY(-1px); }
+}
+
+@keyframes companion-breathe {
+  50% { transform: translateY(-1px); }
+}
+
+@keyframes companion-recoil {
+  25% { transform: translateX(-2px) rotate(-2deg); }
+  65% { transform: translateX(2px) rotate(2deg); }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .companion-pet[data-state] :is(.companion-hover, .companion-animation) {
+    animation: none;
+    transition: none;
+    transform: none;
+  }
+}

@@ -12,6 +12,7 @@ services:
       VITE_PUBLIC_DEMO: ${VITE_PUBLIC_DEMO:-false}
     volumes:
       - ./frontend/src:/web/src:ro
+      - ./frontend/kiro_asset:/web/kiro_asset:ro
       - ./frontend/index.html:/web/index.html:ro
     networks: [web]
     healthcheck:

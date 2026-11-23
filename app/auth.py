@@ -88,12 +88,15 @@ WriteUser = Annotated[User, Depends(require_write_user)]
 
 
 def session_payload(user: User, token: str) -> dict:
-    return {
+    payload = {
         "user": {"id": user.id, "username": user.username, "display_name": user.display_name},
         "roles": [user.role],
         "memberships": [],
         "csrf_token": csrf_value(token),
     }
+    if user.role == "trainee" and settings().corpus_training:
+        payload["corpus_training"] = True
+    return payload
 
 
 @lru_cache

@@ -12,14 +12,15 @@ from app.models import User
 from app.simulation.models import SimulationRun
 
 
-def find_run(db: Session, run_id: UUID, user_id: UUID, *, write: bool = False) -> SimulationRun:
+def find_run(db: Session, run_id: UUID, user_id: UUID, *, write: bool = False, lock: bool = False) -> SimulationRun:
     statement = select(SimulationRun).where(SimulationRun.id == run_id, SimulationRun.user_id == user_id)
-    if write:
+    if write or lock:
         statement = statement.with_for_update()
     run = db.scalar(statement)
     if run is None:
         raise ApiError(404, "SIMULATION_RUN_NOT_FOUND", "실습 실행을 찾을 수 없습니다.")
     if write and run.status != "ACTIVE":
+        reject_paused(run)
         raise ApiError(409, "SIMULATION_COMPLETED", "완료된 실습은 수정할 수 없습니다.")
     return run
 
@@ -32,13 +33,15 @@ def writable_run(run_id: UUID, db: Database, user: WriteUser) -> SimulationRun:
     return find_run(db, run_id, user.id, write=True)
 
 
+def reject_paused(run: SimulationRun) -> None:
+    if run.status == "PAUSED":
+        raise ApiError(409, "SIMULATION_PAUSED", "일시정지된 실습입니다. 내 실습에서 이어서 진행할 수 있습니다.")
+
+
 def finalizing_run(run_id: UUID, db: Database, user: WriteUser) -> SimulationRun:
     # Identical replays also take this lock after completion.
-    run = db.scalar(select(SimulationRun).where(
-        SimulationRun.id == run_id, SimulationRun.user_id == user.id,
-    ).with_for_update())
-    if run is None:
-        raise ApiError(404, "SIMULATION_RUN_NOT_FOUND", "실습 실행을 찾을 수 없습니다.")
+    run = find_run(db, run_id, user.id, lock=True)
+    reject_paused(run)
     return run
 
 

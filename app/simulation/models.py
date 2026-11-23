@@ -94,7 +94,7 @@ class SimulationRun(Base):
                              name="fk_run_final_revision", match="FULL"),
         CheckConstraint("finalized_handover_id IS NULL OR status='COMPLETED'", name="ck_run_final_state"),
         CheckConstraint(
-            "(status = 'ACTIVE' AND completed_at IS NULL) "
+            "(status IN ('ACTIVE', 'PAUSED') AND completed_at IS NULL) "
             "OR (status = 'COMPLETED' AND completed_at IS NOT NULL)",
             name="ck_simulation_run_status",
         ),
@@ -109,6 +109,7 @@ class SimulationRun(Base):
     completed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     incoming_report_snapshot: Mapped[dict] = mapped_column(JSONB)
     start_request_key: Mapped[str] = mapped_column(String(128))
+    start_paused_run_id: Mapped[UUID | None]
     last_event_sequence: Mapped[int] = mapped_column(BigInteger, server_default=text("0"))
     finalized_handover_id: Mapped[UUID | None]
     finalized_revision: Mapped[int | None]

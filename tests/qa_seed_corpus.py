@@ -24,9 +24,11 @@ from app.knowledge.models import IndexJob, IndexStatus, KnowledgeChunk, SopDocum
 from app.models import User
 from app.settings import settings
 from app.simulation.models import Scenario, ScenarioHost, ScenarioIncident, ScenarioShiftSlot, ScenarioTicketTemplate
+from app.simulation.network_actions import NETWORK_RULE_VERSION, NETWORK_SCENARIO, NETWORK_VERSION
 from app.tickets import Severity, TicketStatus
 from tests.corpus_data import HOST_HISTORY, SCENARIOS, SOPS
 from tests.corpus_expectations import EXPECTATIONS
+from tests.corpus_network import NETWORK_IMPACT, NETWORK_OBSERVATIONS, NETWORK_ROW, SOP, SOP_KEY, SOP_QUERY, SOP_SECTION, SOP_TITLE
 
 PROJECT = "polytech-qa-synthetic-corpus"
 DATABASE = "polytech_training_corpus"
@@ -55,8 +57,25 @@ def require(condition, message):
         raise RuntimeError(message)
 
 
-def identifier(key):
-    return uuid5(NAMESPACE_URL, f"polytech/{PROJECT}/{VERSION}/{key}")
+def identifier(key, version=VERSION):
+    return uuid5(NAMESPACE_URL, f"polytech/{PROJECT}/{version}/{key}")
+
+
+def corpus_scenarios():
+    for position, (key, row) in enumerate(SCENARIOS.items()):
+        yield position, key, VERSION, row
+        if PREFIX + key == NETWORK_SCENARIO:
+            yield position, key, NETWORK_VERSION, NETWORK_ROW
+
+
+def linked_sop(version, ticket_key, sop):
+    return SOP_KEY if version == NETWORK_VERSION and ticket_key in NETWORK_OBSERVATIONS else sop
+
+
+def corpus_counts():
+    scenarios = list(corpus_scenarios())
+    return {"sops": len(SOPS) + 1, "ticket_templates": sum(len(row[-1]) for _, _, _, row in scenarios),
+            "scenarios": len(scenarios), "host_incidents": len(scenarios)}
 
 
 def guarded_engine():
@@ -79,6 +98,8 @@ def guarded_engine():
 
 
 def sop_payload(key):
+    if key == SOP_KEY:
+        return SOP.encode()
     title, scope, observe, act, verify = SOPS[key]
     return (
         f"# {title}\n\n가상 데이터센터 교육용 SOP. 모든 식별자와 수치는 합성입니다.\n"
@@ -109,15 +130,17 @@ def validate_data():
             dispositions.add(expectation[-1])
     require(used_sops == set(SOPS) and dispositions == {"handover", "resolved", "insufficient", "recurrence"},
             "Missing SOP relationship or scenario outcome.")
+    require(len(NETWORK_ROW[-1]) == 5 and NETWORK_OBSERVATIONS.keys() == NETWORK_IMPACT.keys()
+            and set(NETWORK_OBSERVATIONS) == {"ticket-01", "ticket-02"}, "Invalid network pilot fixtures.")
 
 
 def ensure_sops(db, actor_id):
     documents = {}
-    for key, sop in SOPS.items():
+    for key, sop_title in {**{key: sop[0] for key, sop in SOPS.items()}, SOP_KEY: SOP_TITLE}.items():
         payload = sop_payload(key)
         digest = hashlib.sha256(payload).hexdigest()
         filename = f"{PREFIX}{key}.md"
-        title = "합성 SOP · " + sop[0]
+        title = "합성 SOP · " + sop_title
         matches = db.scalars(select(SopDocument).where(SopDocument.filename == filename)).all()
         if matches:
             require(len(matches) == 1, f"Duplicate fixture filename: {filename}")
@@ -154,10 +177,10 @@ def action_catalog(db):
 
 def build_scenarios(db, documents):
     catalog = action_catalog(db)
-    for position, (key, row) in enumerate(SCENARIOS.items()):
+    for position, key, version, row in corpus_scenarios():
         title, family, default_service, default_code, cases = row
         scenario_key = PREFIX + key
-        scenario_id = identifier(scenario_key)
+        scenario_id = identifier(scenario_key, version)
         start = datetime(2026, 11, 10 + position, 8 if position % 2 == 0 else 20, tzinfo=KST)
         crews = ["ABCD"[(position + slot) % 4] for slot in range(3)]
         config = {
@@ -166,14 +189,14 @@ def build_scenarios(db, documents):
                            f"완료된 {cases[2][3]}은 참고 기록입니다. 현재 근무에서 남은 위험을 확인해 {crews[2]}조 Bot으로 넘기세요.",
                 "ticket_templates": ["ticket-01", "ticket-02"],
             },
-            "evaluation_rule_version": "synthetic-corpus-1",
+            "evaluation_rule_version": NETWORK_RULE_VERSION if version == NETWORK_VERSION else "synthetic-corpus-1",
             "action_catalog": catalog,
         }
         hosts = []
         templates = []
         for index, (status, severity, sop, subject, symptom, diagnostic, performed, next_action) in enumerate(cases):
             ticket_key = f"ticket-{index + 1:02}"
-            host_id = identifier(f"{key}/{ticket_key}/host")
+            host_id = identifier(f"{key}/{ticket_key}/host", version)
             asset, service, code = ASSET.get(sop, (family, default_service, default_code))
             resolved = status in RESOLVED
             code_missing = index == 4 or asset == "memory-pressure"
@@ -181,6 +204,9 @@ def build_scenarios(db, documents):
                           "error_code": None if resolved or code_missing else code}
             if asset == "memory" and not resolved:
                 host_state["replacement_done"] = False
+            pilot = version == NETWORK_VERSION and ticket_key in NETWORK_OBSERVATIONS
+            if pilot:
+                host_state["network_observations"] = NETWORK_OBSERVATIONS[ticket_key]
             hosts.append({"id": host_id, "scenario_id": scenario_id,
                           "host_key": f"SIM-{key.upper()}-{index + 1:02}",
                           "hostname": f"synthetic-{key}-{index + 1:02}.example.invalid",
@@ -188,6 +214,8 @@ def build_scenarios(db, documents):
             previous = index < 3
             detected = start - timedelta(minutes=180 - index * 30) if previous else start
             observed = detected + timedelta(minutes=4 if previous else 0)
+            if pilot:
+                observed = start - timedelta(minutes=4)
             finished = detected + timedelta(minutes=8) if resolved else None
             crew = crews[0] + "조 Bot" if previous else "교대 시작 관측"
             history = [{"at": observed.isoformat(), "crew": crew, "observation": f"진단 로그: {diagnostic}"},
@@ -195,38 +223,39 @@ def build_scenarios(db, documents):
             fields = {
                 "title": subject, "description": f"[교육용] {symptom}\n관측 로그: {diagnostic}",
                 "service": service, "severity": severity, "status": status,
-                "impact": "서비스 기준선 복귀를 확인함" if resolved else
+                "impact": NETWORK_IMPACT[ticket_key] if pilot else "서비스 기준선 복귀를 확인함" if resolved else
                           ("영향 범위 확인 중" if severity == "P4" else f"합성 {service} 서비스 관측 범위에서 영향 확인"),
                 "resolution": performed if resolved else None, "resolved_at": finished.isoformat() if finished else None,
                 "next_action": next_action,
                 "recheck_at": (start + timedelta(hours=1)).isoformat() if status == "waiting" else None,
-                "sop_refs": [str(documents[sop])], "observed_history": history,
+                "sop_refs": [str(documents[linked_sop(version, ticket_key, sop)])], "observed_history": history,
             }
             require(all(detected <= datetime.fromisoformat(entry["at"]) <= start for entry in history),
                     f"{key}/{ticket_key}: observation outside initial shift boundary.")
-            templates.append({"id": identifier(f"{key}/{ticket_key}"), "scenario_id": scenario_id,
+            templates.append({"id": identifier(f"{key}/{ticket_key}", version), "scenario_id": scenario_id,
                               "scenario_host_id": host_id, "template_key": ticket_key, "initial_ticket": fields,
                               "detected_at": detected, "origin": "CARRYOVER" if previous else "INITIAL"})
         # Preserve the manifest of previously published v1.0 templates through the display-label change.
         manifest_templates = deepcopy(templates)
-        for template in manifest_templates:
-            fields = template["initial_ticket"]
-            fields["description"] = "[합성]" + fields["description"].removeprefix("[교육용]")
+        if version == VERSION:
+            for template in manifest_templates:
+                fields = template["initial_ticket"]
+                fields["description"] = "[합성]" + fields["description"].removeprefix("[교육용]")
         manifest = hashlib.sha256(json.dumps([config, hosts, manifest_templates], sort_keys=True,
                                             ensure_ascii=False, default=str).encode())
         config["corpus_manifest_sha256"] = manifest.hexdigest()
-        existing = db.scalar(select(Scenario).where(Scenario.scenario_key == scenario_key, Scenario.version == VERSION))
+        existing = db.scalar(select(Scenario).where(Scenario.scenario_key == scenario_key, Scenario.version == version))
         if existing:
             require(existing.id == scenario_id and existing.is_published and existing.config == config,
-                    f"Published scenario collision: {scenario_key}")
+                    f"Published scenario collision: {scenario_key} v{version}")
             continue
-        scenario = Scenario(id=scenario_id, scenario_key=scenario_key, version=VERSION, title="[교육용] " + title,
+        scenario = Scenario(id=scenario_id, scenario_key=scenario_key, version=version, title="[교육용] " + title,
                             timezone=KST.key, virtual_start_at=start, is_published=False, config=config)
         db.add(scenario)
         db.flush()
         for slot in range(3):
             begins = start + (slot - 1) * HOURS
-            db.add(ScenarioShiftSlot(id=identifier(f"{key}/shift/{slot}"), scenario_id=scenario_id, slot_order=slot,
+            db.add(ScenarioShiftSlot(id=identifier(f"{key}/shift/{slot}", version), scenario_id=scenario_id, slot_order=slot,
                                      crew_code=crews[slot], shift_type="DAY" if begins.hour == 8 else "NIGHT",
                                      actor_type="TRAINEE" if slot == 1 else "BOT", starts_at=begins, ends_at=begins + HOURS))
         db.add_all(ScenarioHost(**host) for host in hosts)
@@ -239,11 +268,12 @@ def build_scenarios(db, documents):
 
 def ensure_host_history(db):
     embedder = FakeEmbedder()
-    for key, (title, resolution) in HOST_HISTORY.items():
-        template = db.get(ScenarioTicketTemplate, identifier(f"{key}/{RECURRENCE_TEMPLATE}"))
+    for _, key, version, _ in corpus_scenarios():
+        title, resolution = HOST_HISTORY[key]
+        template = db.get(ScenarioTicketTemplate, identifier(f"{key}/{RECURRENCE_TEMPLATE}", version))
         host = db.get(ScenarioHost, template.scenario_host_id)
         fields = {
-            "id": identifier(f"{key}/host-history"), "incident_key": f"{PREFIX}{key}-previous",
+            "id": identifier(f"{key}/host-history", version), "incident_key": f"{PREFIX}{key}-previous",
             "scenario_id": template.scenario_id, "scenario_host_id": host.id,
             "occurred_at": template.detected_at - timedelta(days=1), "title": title,
             "error_code": host.initial_state["error_code"], "resolution": resolution,
@@ -299,6 +329,7 @@ def wait_for_index(documents):
 def verify(owner, documents):
     from main import app
 
+    counts = corpus_counts()
     chunks = wait_for_index(documents)
     with Session(owner) as db:
         ids = db.scalars(select(Scenario.id).where(Scenario.scenario_key.startswith(PREFIX), Scenario.is_published)).all()
@@ -306,7 +337,8 @@ def verify(owner, documents):
         linked_documents = db.scalar(select(func.count()).select_from(SopDocument).where(
             SopDocument.filename.startswith(PREFIX), SopDocument.training_approved,
         ))
-        require((linked_documents, tickets, len(ids)) == (12, 40, 8), "Persisted fixture counts differ.")
+        require((linked_documents, tickets, len(ids)) == (counts["sops"], counts["ticket_templates"], counts["scenarios"]),
+                "Persisted fixture counts differ.")
 
     origin = settings().origin
     auth = {"Origin": origin}
@@ -326,14 +358,17 @@ def verify(owner, documents):
                 "Legacy scenarios appeared in the corpus start list.")
         require(all(item["title"].startswith("[교육용]") for item in catalog if item["scenario_key"].startswith(PREFIX)),
                 "Incorrect education title prefix.")
+        require({item["version"] for item in catalog if item["scenario_key"] == NETWORK_SCENARIO} == {VERSION, NETWORK_VERSION},
+                "Network pilot or earlier scenario version is missing.")
         searched = set()
         observed = 0
         host_incidents = 0
         agent_context_checks = 0
         rubric_text = {value for rows in EXPECTATIONS.values() for row in rows for value in row[:3] if len(value) >= 24}
-        for key, row in SCENARIOS.items():
-            start = client.post("/api/v1/simulation-runs", json={"scenario_key": PREFIX + key, "scenario_version": VERSION},
-                                headers={**auth, "Idempotency-Key": f"corpus-v1-start-{key}"})
+        for _, key, version, row in corpus_scenarios():
+            request_version = "1" if version == VERSION else version
+            start = client.post("/api/v1/simulation-runs", json={"scenario_key": PREFIX + key, "scenario_version": version},
+                                headers={**auth, "Idempotency-Key": f"corpus-v{request_version}-start-{key}"})
             require(start.status_code in (200, 201), f"{key}: start failed ({start.status_code}).")
             base = "/api/v1/simulation-runs/" + start.json()["id"]
             slots = client.get(base + "/schedule").json()["slots"]
@@ -349,7 +384,7 @@ def verify(owner, documents):
                     f"{key}: incoming report is not ordered.")
             recurrence = by_title[row[-1][3][3]]
             history_response = client.get(f'{base}/tickets/{recurrence["id"]}/host-incidents')
-            history_id = str(identifier(f"{key}/host-history"))
+            history_id = str(identifier(f"{key}/host-history", version))
             require(history_response.status_code == 200, f"{key}: host history lookup failed.")
             incident = next((item for item in history_response.json()["incidents"] if item["incident_id"] == history_id), None)
             require(incident is not None and datetime.fromisoformat(incident["occurred_at"]) <
@@ -363,8 +398,9 @@ def verify(owner, documents):
             require(search.status_code == 200 and history_id in {hit["source_id"] for hit in search.json()["results"]},
                     f"{key}: earlier host incident missing from search.")
             host_incidents += 1
-            for case in row[-1]:
-                status, severity, sop_key, title, _, diagnostic, performed, next_action = case
+            for index, case in enumerate(row[-1], 1):
+                status, severity, sop, title, _, diagnostic, performed, next_action = case
+                sop_key = linked_sop(version, f"ticket-{index:02}", sop)
                 ticket = by_title[title]
                 path = base + "/tickets/" + ticket["id"]
                 detail = client.get(path).json()
@@ -387,16 +423,19 @@ def verify(owner, documents):
                         f"{key}: missing or out-of-order seed history.")
                 observed += len(seed_history)
                 if sop_key not in searched:
+                    query = SOP_QUERY if sop_key == SOP_KEY else SOPS[sop_key][0]
                     search = client.post(base + "/knowledge/search", headers=auth, json={
-                        "query": SOPS[sop_key][0], "source_types": ["SOP"], "ticket_id": ticket["id"], "limit": 5,
+                        "query": query, "source_types": ["SOP"], "ticket_id": ticket["id"], "limit": 5,
                     })
-                    require(search.status_code == 200 and str(documents[sop_key]) in
-                            {hit["source_id"] for hit in search.json()["results"]}, f"SOP recall@5 failed: {sop_key}")
+                    require(search.status_code == 200 and any(
+                        hit["source_id"] == str(documents[sop_key]) and (sop_key != SOP_KEY or hit["section"] == SOP_SECTION)
+                        for hit in search.json()["results"]
+                    ), f"SOP recall@5 failed: {sop_key}")
                     toolbox = Toolbox(UUID(login.json()["user"]["id"]), UUID(ticket["id"]), run_id=UUID(start.json()["id"]))
                     for name, params in (
                         ("get_ticket_details", {"ticket_id": ticket["id"]}),
                         ("get_ticket_history", {"ticket_id": ticket["id"]}),
-                        ("search_sop", {"query": SOPS[sop_key][0], "limit": 5}),
+                        ("search_sop", {"query": query, "limit": 5}),
                     ):
                         result = asyncio.run(toolbox.execute(name, params))
                         require(result.status == "ok" and result.payload.get("untrusted_data"), f"AI tool failed: {name}.")
@@ -409,15 +448,15 @@ def verify(owner, documents):
                     searched.add(sop_key)
             if start.json()["status"] == "ACTIVE":
                 result = client.post(base + "/outgoing-handover/finalize", json={"confirm": True, "expected_revision": 0},
-                                     headers={**auth, "Idempotency-Key": f"corpus-v1-finish-{key}"})
+                                     headers={**auth, "Idempotency-Key": f"corpus-v{request_version}-finish-{key}"})
                 require(result.status_code == 200, f"{key}: handover finalization failed ({result.status_code}).")
             report = client.get(base + "/outgoing-handover").json()
             require(report["status"] == "FINALIZED" and len(report["items"]) == 4
                     and all(item["status"] not in RESOLVED for item in report["items"]), f"{key}: outgoing selection mismatch.")
-        require(len(searched) == len(SOPS), "SOP query coverage incomplete.")
+        require(len(searched) == counts["sops"], "SOP query coverage incomplete.")
         client.post("/api/v1/auth/logout", headers=auth)
-    return {"sops": 12, "ticket_templates": 40, "scenarios": 8, "sop_chunks": chunks, "sop_recall_at_5": len(searched),
-            "verified_runs": 8, "observed_history_events": observed, "offline_expectations": 40,
+    return {**counts, "sop_chunks": chunks, "sop_recall_at_5": len(searched),
+            "verified_runs": counts["scenarios"], "observed_history_events": observed, "offline_expectations": 40,
             "host_incidents": host_incidents, "agent_context_checks": agent_context_checks}
 
 
@@ -431,14 +470,12 @@ def main():
     if not args.apply:
         if args.verify:
             parser.error("--verify requires --apply and creates isolated QA verification runs")
-        print(json.dumps({"sops": 12, "ticket_templates": 40, "scenarios": 8, "host_incidents": 8, "offline_expectations": 40}))
+        print(json.dumps({**corpus_counts(), "offline_expectations": 40}))
         return
     owner = guarded_engine()
     try:
         documents = seed(owner, args.username)
-        result = verify(owner, documents) if args.verify else {
-            "sops": len(documents), "ticket_templates": 40, "scenarios": 8, "host_incidents": 8,
-        }
+        result = verify(owner, documents) if args.verify else corpus_counts()
         print(json.dumps(result))
     finally:
         owner.dispose()

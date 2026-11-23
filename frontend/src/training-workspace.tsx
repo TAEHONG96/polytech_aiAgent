@@ -3,7 +3,7 @@ import type { FormEvent } from 'react'
 import { ReportView } from './agent'
 import type { Run as Analysis } from './agent'
 import { api, ApiError, errorMessage, statuses } from './api'
-import type { Session, Status, Ticket } from './api'
+import type { Session, SimulationStatus, Status, Ticket } from './api'
 import { TicketOperations } from './ticket-operations'
 import { TrainingEvaluation, TrainingHandover } from './training-evaluation'
 import { trainingSourceHref } from './training-source'
@@ -24,7 +24,7 @@ type RunHost = {
 }
 const assetLabels: Record<string, string> = { memory: '메모리', storage: '스토리지' }
 const healthLabels: Record<string, string> = { degraded: '성능 저하', verification_pending: '재진단 필요', healthy: '정상' }
-type Run = { status: 'ACTIVE' | 'COMPLETED'; virtual_now: string; scenario: { key: string; version: string } }
+type Run = { status: SimulationStatus; virtual_now: string; scenario: { key: string; version: string } }
 type Slot = { id: string; crew_code: string; type: string; actor_type: string; starts_at: string; ends_at: string }
 type Incoming = { summary: string; tickets: { ticket_id: string }[] }
 type Incident = { id: string; ticket_key: string | null; summary: string; occurred_at: string; resolution: string; source_url: string }
@@ -35,7 +35,29 @@ type CatalogAction = {
 }
 type Activity = {
   action_id: string; action_code: string; kind: 'ACTION' | 'NOTE'; occurred_at: string
-  event_sequence: number; ticket_version: number; note: string | null; result: { message: string; health: string; error_code: string | null } | null
+  event_sequence: number; ticket_version: number; note: string | null; result: ActionResult | null
+}
+
+type ActionResult = {
+  message: string; health: string; error_code: string | null
+  observations?: { label: string; target?: string; window?: string; value: string | number | null; before?: string | number; unit?: string }[]
+  unconfirmed?: string[]
+}
+
+function ActionResultDetails({ result }: { result: ActionResult }) {
+  return <div className="training-action-result">
+    <p>{result.message}</p>
+    {result.observations?.length ? <dl>{result.observations.map((entry, index) => {
+      const measure = (value: number | string) => `${value}${entry.unit ?? ''}`
+      return <div key={index}>
+        <dt>{entry.label}{entry.target && ` · ${entry.target}`}</dt>
+        <dd>{entry.before !== undefined && `${measure(entry.before)} → `}{entry.value === null ? '미확인' : measure(entry.value)}
+          {entry.window && <small> · {entry.window}</small>}</dd>
+      </div>
+    })}</dl> : null}
+    {result.unconfirmed?.length ? <p><strong>미확인</strong> · {result.unconfirmed.join(', ')}</p> : null}
+    {(result.error_code || !result.observations) && <small>장애 코드 {result.error_code ?? '오류 없음'}</small>}
+  </div>
 }
 
 function useResource<T>(path: string, revision = 0) {
@@ -74,6 +96,7 @@ export function TrainingWorkspace({ runId, ticketId, session }: { runId: string;
     </>}</nav>
     {error && <p role="alert">{error}</p>}
     {!run && !error && <p role="status">실습을 불러오는 중입니다.</p>}
+    {run?.status === 'PAUSED' && <p className="notice">일시정지된 실습입니다. <a href="/simulation">내 실습에서 이어서 진행</a></p>}
     {run && (ticketId ? <TicketWorkspace base={base} ticketId={ticketId} run={run} session={session} />
       : <Overview base={base} run={run} session={session} />)}
   </>
@@ -96,7 +119,7 @@ function Overview({ base, run, session }: { base: string; run: Run; session: Ses
       <p className="training-context">{run.scenario.key} · v{run.scenario.version}</p>
       <h1>{completed ? '완료된 데이터센터 근무' : '데이터센터 교대 근무'}</h1>
       <p>고정 실습 시각 {date(run.virtual_now)} KST{current && ` · ${current.crew_code}조 ${current.type === 'DAY' ? '주간' : '야간'}`}</p>
-    </div><span className="training-badge">{completed ? '완료 · 읽기 전용' : '진행 중'}</span></div>
+    </div><span className="training-badge">{completed ? '완료 · 읽기 전용' : run.status === 'PAUSED' ? '일시정지 · 읽기 전용' : '진행 중'}</span></div>
     <nav className="training-nav training-nav-sections" aria-label="실습 자료"><a href="#schedule">근무·인계</a><a href="#tickets">티켓</a>
       <a href="#knowledge">SOP·유사 장애</a><a href="#activity">행동 타임라인</a><a href="#outgoing">발신 인계</a>
       {completed && <a href="#evaluation">평가 결과</a>}</nav>
@@ -145,7 +168,7 @@ function Overview({ base, run, session }: { base: string; run: Run; session: Ses
     </div>
     <Knowledge base={base} session={session} />
     <RunTimeline base={base} titles={Object.fromEntries(tickets.data?.items.map(ticket => [ticket.id, ticket.title]) ?? [])} />
-    <TrainingHandover base={base} session={session} completed={completed} />
+    <TrainingHandover base={base} session={session} status={run.status} />
     {completed && <TrainingEvaluation base={base} />}
   </>
 }
@@ -164,7 +187,7 @@ function TicketWorkspace({ base, ticketId, run, session }: { base: string; ticke
   const asset = host?.state.asset_kind
   const health = host?.state.health
   const errorCode = host?.state.error_code
-  const readOnly = run.status === 'COMPLETED' || !!current.archived_at
+  const readOnly = run.status !== 'ACTIVE' || !!current.archived_at
   return <>
     <div className="training-hero"><div><p className="training-context"><code>{current.number}</code> · {origin[current.training_origin]}</p>
       <h1>{current.title}</h1><p>발생 {date(current.detected_at)} KST{incidents.data?.host && ` · ${incidents.data.host.hostname}`}</p></div>
@@ -552,8 +575,7 @@ function VirtualActions({ path, version, readOnly, session, onVersion }: {
           onClick={() => void perform(action.action_code, action.parameters)}>{action.label}</button>}
         {completed ? <div role="status">
           <strong>{action.repeatable ? '최근 수행 결과' : '수행 완료'}</strong>
-          {completed.result && <><p>{completed.result.message}</p>
-            <small>장애 코드: {completed.result.error_code ?? '오류 없음'}</small></>}
+          {completed.result && <ActionResultDetails result={completed.result} />}
           {completed.note && <p className="knowledge-text">{completed.note}</p>}
         </div> : action.blocked_reason && <small>{action.blocked_reason}</small>}
       </li>
@@ -568,7 +590,7 @@ function VirtualActions({ path, version, readOnly, session, onVersion }: {
     <ol>{state?.activity.map(event => <li key={event.action_id}>
       <strong>{event.kind === 'NOTE' ? '자유 메모' : state.catalog.find(action => action.action_code === event.action_code)?.label ?? event.action_code}</strong>
       {' · '}{date(event.occurred_at)} KST · 기록 {event.event_sequence}
-      {event.result && <p>{event.result.message} · {event.result.error_code ?? '오류 없음'}</p>}
+      {event.result && <ActionResultDetails result={event.result} />}
       {event.note && <p className="knowledge-text">{event.note}</p>}
     </li>)}</ol>
   </section>

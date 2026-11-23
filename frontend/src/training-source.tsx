@@ -29,10 +29,38 @@ type Source = {
   asset_kind?: string | null
   host?: { hostname: string; host_key: string } | null
   extracted_text?: string | null
+  content_type?: string
   original_url?: string
   revision?: number
   content?: { summary: string | null; open_items: { ticket_id: string; next_action: string | null }[] }
   items?: { id: string; title: string; status: Status; next_action: string | null }[]
+}
+
+function sopInline(text: string) {
+  return text.split(/(`[^`]+`)/).map((part, index) => part.startsWith('`') && part.endsWith('`')
+    ? <code key={index}>{part.slice(1, -1)}</code> : part)
+}
+
+function SopMarkdown({ text, title }: { text: string; title?: string }) {
+  const blocks = text.trim().replace(/\r\n/g, '\n').replace(/^(#{1,6} .+)\n(?!\n)/gm, '$1\n\n').split(/\n\s*\n/)
+  return <div className="training-sop">{blocks.map((block, index) => {
+    const heading = /^(#{1,6}) (.+)$/.exec(block)
+    if (heading) {
+      if (index === 0 && heading[1] === '#' && title?.replace(/^합성 SOP · /, '') === heading[2]) return null
+      const level = Math.max(2, heading[1].length)
+      const Heading = `h${level}` as 'h2' | 'h3' | 'h4' | 'h5' | 'h6'
+      return <Heading key={index}>{sopInline(heading[2])}</Heading>
+    }
+    const lines = block.split('\n')
+    const ordered = /^\d+\. +/
+    const unordered = /^[-*] +/
+    const marker = lines.every(line => ordered.test(line)) ? ordered : lines.every(line => unordered.test(line)) ? unordered : null
+    if (marker) {
+      const List = marker === ordered ? 'ol' : 'ul'
+      return <List key={index}>{lines.map((line, item) => <li key={item}>{sopInline(line.replace(marker, ''))}</li>)}</List>
+    }
+    return <p className="knowledge-text" key={index}>{sopInline(block)}</p>
+  })}</div>
 }
 
 export function TrainingSource({ path }: { path: string }) {
@@ -72,7 +100,8 @@ export function TrainingSource({ path }: { path: string }) {
         <h2>당시 조치 결과</h2><p className="knowledge-text">{source.resolution || '기록 없음'}</p>
       </>}
       {source?.original_url && <p><a href={source.original_url}>SOP 원본 열기</a></p>}
-      {source?.extracted_text && <div className="knowledge-text">{source.extracted_text}</div>}
+      {source?.extracted_text && (source.content_type === 'text/markdown'
+        ? <SopMarkdown text={source.extracted_text} title={source.title} /> : <div className="knowledge-text">{source.extracted_text}</div>)}
       {source?.content && <>
         <h2>인계 요약</h2><p className="knowledge-text">{source.content.summary ?? '기록된 요약이 없습니다.'}</p>
         <h2>포함된 티켓</h2>

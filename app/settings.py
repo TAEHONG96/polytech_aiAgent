@@ -16,6 +16,7 @@ class Settings:
     csrf_secret: str
     secure_cookie: bool
     training_registration: bool = False
+    corpus_training: bool = False
 
 
 @lru_cache
@@ -39,9 +40,9 @@ def settings() -> Settings:
 
     database_name = os.environ.get("APP_DB_NAME", "polytech")
     loopback = parsed.hostname in {"127.0.0.1", "localhost", "::1"}
+    corpus_training = environment == "simulation" and database_name == "polytech_training_corpus"
     public_corpus_registration = (
-        environment == "simulation" and database_name == "polytech_training_corpus"
-        and parsed.scheme == "https" and os.environ.get("APP_PUBLIC_TRAINING_REGISTRATION") == "1"
+        corpus_training and parsed.scheme == "https" and os.environ.get("APP_PUBLIC_TRAINING_REGISTRATION") == "1"
     )
     return Settings(
         database_url=URL.create(
@@ -55,6 +56,7 @@ def settings() -> Settings:
         origin=origin,
         csrf_secret=csrf_secret,
         secure_cookie=parsed.scheme == "https",
+        corpus_training=corpus_training,
         training_registration=(
             not production
             and os.environ.get("APP_TRAINING_REGISTRATION") == "1"

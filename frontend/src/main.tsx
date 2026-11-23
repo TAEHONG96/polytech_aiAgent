@@ -1,6 +1,6 @@
 /// <reference types="vite/client" />
 
-import { StrictMode, useEffect, useState } from 'react'
+import { lazy, StrictMode, Suspense, useEffect, useState } from 'react'
 import type { FormEvent } from 'react'
 import { createRoot } from 'react-dom/client'
 import { api, ApiError, errorMessage, statuses } from './api'
@@ -16,6 +16,7 @@ import './training.css'
 
 const priorities: Severity[] = ['P1', 'P2', 'P3', 'P4']
 const showDemoAccount = import.meta.env.VITE_PUBLIC_DEMO === 'true'
+const CompanionPet = lazy(() => import('./companion/CompanionPet'))
 const koreanDate = new Intl.DateTimeFormat('ko-KR', {
   timeZone: 'Asia/Seoul', dateStyle: 'medium', timeStyle: 'short',
 })
@@ -413,6 +414,7 @@ function App() {
         </section> : <TrainingPage key={path} path={path} session={session} />}
       </main>
     </div>
+    {session.corpus_training === true && <Suspense fallback={null}><CompanionPet /></Suspense>}
   </div>
 
   return (

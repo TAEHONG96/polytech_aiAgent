@@ -58,6 +58,12 @@ flowchart LR
 
 공통 상태는 로딩, 빈 결과, 네트워크 오류, 권한 없음, 편집 충돌이다. 진행 중인 장애 분석은 약 1.2초 간격으로 폴링하고 완료·실패·화면 이탈 시 중단한다. 누락 정보와 추정은 구분하고 근거를 각 진단 단계 옆에 배치한다. 원문과 모델 출력은 텍스트 또는 제한된 Markdown으로 표시한다. 원시 HTML은 렌더링하지 않는다. 실패한 AI 실행에서도 티켓 수정과 인수인계 수동 편집을 제공한다.
 
+### 키로 컴패니언
+
+키로 컴패니언은 전용 코퍼스 환경(`APP_ENV=simulation`, DB `polytech_training_corpus`)에 로그인한 교육생의 교육 레이아웃에서 표시한다. 캐릭터 위치와 표시·정지 설정은 같은 탭의 `sessionStorage`에 저장한다. 코퍼스 개발 서버의 우측 하단 **컴패니언 → 상태 미리보기**에서 8개 상태를 확인하고 **자동**으로 복귀할 수 있다.
+
+`frontend/src/companion/companion-events.ts`는 `setCompanionState(state)`, `showCompanionHint(text)`, `openCompanionChat()`, `moveCompanionTo({ x, y })`를 제공한다. 좌표는 캐릭터 영역의 왼쪽 위를 기준으로 한 뷰포트 CSS 픽셀이다. `thinking`은 이후 상태 전환까지 유지하며, `showCompanionHint`는 호출자가 전달한 문구를 잠시 표시한다. 클릭이나 `openCompanionChat()`으로 발생하는 `dco:companion-chat-requested` 이벤트를 후속 단계의 채팅 UI에서 구독할 수 있다.
+
 ## Docker Compose 배포 구조
 
 | 서비스 | 공통·운영 | 개발 오버라이드 |

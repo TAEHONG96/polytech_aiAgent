@@ -1,5 +1,6 @@
 export type Status = 'open' | 'in_progress' | 'waiting' | 'resolved' | 'closed'
 export type Severity = 'P1' | 'P2' | 'P3' | 'P4'
+export type SimulationStatus = 'ACTIVE' | 'PAUSED' | 'COMPLETED'
 
 export const statuses: Record<Status, string> = {
   open: '접수',
@@ -36,6 +37,7 @@ export interface Session {
   user: { id: string; display_name: string }
   roles: string[]
   csrf_token: string
+  corpus_training?: boolean
 }
 
 export class ApiError extends Error {

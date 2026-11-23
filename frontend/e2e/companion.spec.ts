@@ -1,0 +1,293 @@
+import { expect, test } from '@playwright/test'
+import type { Locator, Page } from '@playwright/test'
+import type { Session } from '../src/api'
+
+test.use({ viewport: { width: 1280, height: 800 } })
+
+const states = ['idle', 'walking', 'hint', 'chatting', 'thinking', 'happy', 'sleeping', 'surprised']
+const runId = 'a0000000-0000-4000-8000-000000000001'
+const runPath = `/simulation-runs/${runId}`
+const corpusSession = {
+  user: { id: 'synthetic-trainee', display_name: '테스트 교육생' },
+  roles: ['trainee'], csrf_token: 'synthetic', corpus_training: true,
+}
+const pet = (page: Page) => page.getByRole('button', { name: '키로 컴패니언' })
+const animation = (page: Page) => pet(page).locator('.companion-animation')
+
+async function center(locator: Locator) {
+  const box = (await locator.boundingBox())!
+  return { x: box.x + box.width / 2, y: box.y + box.height / 2 }
+}
+
+async function position(locator: Locator) {
+  const { x, y } = (await locator.boundingBox())!
+  return { x, y }
+}
+
+test.beforeEach(async ({ page }) => {
+  await page.route('**/api/v1/auth/session', route => route.fulfill({ json: corpusSession }))
+  await page.route(url => url.pathname === '/api/v1/tickets', route => route.fulfill({ json: { items: [], next_cursor: null } }))
+  await page.route('**/api/v1/simulation', route => route.fulfill({ json: { active_run_id: runId, available_scenarios: [] } }))
+  await page.route('**/api/v1/simulation-runs', route => route.fulfill({ json: { items: [] } }))
+  await page.addInitScript(() => { Math.random = () => 0.6 })
+})
+
+test('코퍼스 교육생 로그인 뒤에만 컴패니언을 로드한다', async ({ page }) => {
+  const sessionPath = '**/api/v1/auth/session'
+  const widget = page.locator('.companion-widget')
+  let session: Session | null = { ...corpusSession, roles: ['operator'] }
+  await page.route(sessionPath, route => session ? route.fulfill({ json: session }) : route.fulfill({ status: 401 }))
+  await page.goto('/tickets')
+  await expect(page.getByRole('heading', { name: '장애 티켓' })).toBeVisible()
+  await expect(widget).toHaveCount(0)
+
+  session = { ...corpusSession, corpus_training: undefined }
+  await page.goto('/simulation')
+  await expect(page.getByRole('heading', { name: '내 실습', exact: true })).toBeVisible()
+  await expect(widget).toHaveCount(0)
+
+  session = null
+  await page.route('**/api/v1/auth/registration', route => route.fulfill({ json: { enabled: false } }))
+  await page.route('**/api/v1/auth/login', route => route.fulfill({ json: corpusSession }))
+  await page.goto('/login')
+  await expect(page.getByRole('heading', { name: '로그인' })).toBeVisible()
+  await expect(widget).toHaveCount(0)
+  await page.getByLabel('사용자명').fill('synthetic-trainee')
+  await page.getByLabel('비밀번호').fill('synthetic-password')
+  await page.getByRole('button', { name: '로그인', exact: true }).click()
+  await expect(page).toHaveURL(/\/simulation$/)
+  await expect(pet(page)).toBeVisible()
+})
+
+test('개발 도구에서 원본 이미지 8장을 재사용해 전환한다', async ({ page }) => {
+  await page.goto('/simulation')
+  await page.getByText('컴패니언', { exact: true }).click()
+  const preview = page.getByLabel('상태 미리보기')
+  test.skip(await preview.count() === 0, '상태 미리보기는 Vite 개발 서버에서만 제공됩니다.')
+  await expect(pet(page).locator('img')).toHaveCount(8)
+  await expect.poll(() => pet(page).locator('img').evaluateAll(images =>
+    images.every(image => image instanceof HTMLImageElement && image.complete && image.naturalWidth > 0),
+  )).toBe(true)
+  const cursor = await center(pet(page))
+  expect(await page.evaluate(({ x, y }) => Boolean(document.elementFromPoint(x, y)?.closest('.companion-pet')), cursor)).toBe(true)
+
+  const original = await pet(page).locator('[data-image-state=idle]').elementHandle()
+  for (const state of states) {
+    await preview.selectOption(state)
+    await expect(pet(page)).toHaveAttribute('data-state', state)
+    const image = pet(page).locator('img:visible')
+    await expect(image).toHaveCount(1)
+    await expect(image).toHaveAttribute('data-image-state', state)
+    await expect(image).toHaveAttribute('src', new RegExp('/' + (state === 'surprised' ? 'suprised' : state) + '(?:-[^/.]+)?\\.png$'))
+  }
+  expect(await original!.evaluate(image => image.isConnected)).toBe(true)
+  await preview.selectOption('')
+  await expect(pet(page)).toHaveAttribute('data-state', 'idle')
+})
+
+test('자율 이동은 호버 때 멈추고 다시 진행하며 유휴 시간이 길어지면 잠든다', async ({ page }) => {
+  await page.clock.install()
+  await page.goto('/simulation')
+  await expect(pet(page)).toBeVisible()
+  await page.clock.pauseAt(new Date(await page.evaluate(() => Date.now() + 300)))
+  const initial = await position(pet(page))
+  expect(initial.x).toBeGreaterThan(1100)
+  expect(initial.y).toBeGreaterThan(600)
+
+  await page.clock.runFor(12_900)
+  await expect(pet(page)).toHaveAttribute('data-state', 'walking')
+  await expect(pet(page)).toHaveAttribute('data-direction', 'left')
+  const walking = await position(pet(page))
+  expect(walking.x).toBeLessThan(initial.x)
+  expect(walking.x).toBeGreaterThan(initial.x - 120)
+
+  const cursor = await center(pet(page))
+  await page.mouse.move(cursor.x, cursor.y)
+  const hovered = await position(pet(page))
+  await page.clock.runFor(3_000)
+  expect(await position(pet(page))).toEqual(hovered)
+  await page.mouse.move(500, 40)
+  await page.clock.runFor(2_000)
+  await expect(pet(page)).toHaveAttribute('data-state', 'idle')
+  expect((await position(pet(page))).x).toBeLessThan(hovered.x)
+
+  await page.clock.runFor(80_000)
+  await expect(pet(page)).toHaveAttribute('data-state', 'sleeping')
+  const sleeping = await center(pet(page))
+  await page.evaluate(() => {
+    window.addEventListener('dco:companion-chat-requested', () => { document.body.dataset.chatRequested = 'yes' }, { once: true })
+  })
+  await page.mouse.move(sleeping.x, sleeping.y)
+  await page.mouse.down()
+  await page.mouse.move(sleeping.x + 3, sleeping.y)
+  await page.mouse.up()
+  await expect(pet(page)).toHaveAttribute('data-state', 'chatting')
+  await expect(page.locator('body')).toHaveAttribute('data-chat-requested', 'yes')
+  await page.clock.runFor(2_000)
+  await expect(pet(page)).toHaveAttribute('data-state', 'idle')
+})
+
+test('드래그가 클릭을 발생시키지 않고 기존 링크와 입력을 사용할 수 있다', async ({ page }) => {
+  await page.route(`**/api/v1${runPath}`, route => route.fulfill({ json: {
+    status: 'ACTIVE', virtual_now: '2026-01-01T00:00:00Z', scenario: { key: 'synthetic-ops-boot', version: '1.0' },
+  } }))
+  const resources = {
+    schedule: { slots: [] }, 'incoming-handover': { tickets: [], summary: '' },
+    tickets: { items: [], next_cursor: null }, events: { items: [], next_after_sequence: null },
+  }
+  await page.route(`**/api/v1${runPath}/**`, route => {
+    const resource = new URL(route.request().url()).pathname.split('/').at(-1) as keyof typeof resources
+    return resources[resource] ? route.fulfill({ json: resources[resource] }) : route.fulfill({ status: 404 })
+  })
+  await page.goto('/simulation')
+  await expect(pet(page)).toBeVisible()
+  await page.evaluate(() => {
+    window.addEventListener('dco:companion-chat-requested', () => { document.body.dataset.chatRequested = 'yes' })
+  })
+  const start = await center(pet(page))
+  const existingLink = page.getByRole('link', { name: '진행 중인 실습 계속하기' })
+  await expect(existingLink).toBeVisible()
+  const target = await center(existingLink)
+  await page.mouse.move(start.x, start.y)
+  await page.mouse.down()
+  await page.mouse.move(start.x - 40, start.y - 30)
+  await expect(pet(page)).toHaveAttribute('data-state', 'surprised')
+  await page.mouse.move(target.x, target.y)
+  await page.mouse.up()
+  expect(await page.locator('body').getAttribute('data-chat-requested')).toBeNull()
+  const dropped = await position(pet(page))
+  expect(dropped.x).toBeCloseTo(target.x - 48, 0)
+  const headerHeight = (await page.locator('header').boundingBox())!.height
+  expect(dropped.y).toBeCloseTo(Math.max(headerHeight + 12, target.y - 48), 0)
+  expect(await page.evaluate(({ x, y }) => document.elementFromPoint(x, y)?.closest('a')?.getAttribute('href'), target)).toBe(runPath)
+  await page.mouse.click(target.x, target.y)
+  const input = page.getByRole('searchbox', { name: '티켓 검색' })
+  await expect(input).toBeVisible()
+  await expect(pet(page)).toBeVisible()
+  expect(await position(pet(page))).toEqual(dropped)
+
+  const dragStart = await center(pet(page))
+  const field = await center(input)
+  await page.mouse.move(dragStart.x, dragStart.y)
+  await page.mouse.down()
+  await page.mouse.move(field.x, field.y)
+  await page.mouse.up()
+  await page.mouse.click(field.x, field.y)
+  await expect(input).toBeFocused()
+  await page.keyboard.type('합성 장애 제목')
+  await expect(input).toHaveValue('합성 장애 제목')
+
+  await page.setViewportSize({ width: 800, height: 520 })
+  const resized = (await pet(page).boundingBox())!
+  expect(resized.x + resized.width).toBeLessThanOrEqual(800)
+  expect(resized.y + resized.height).toBeLessThanOrEqual(520)
+})
+
+test('교육 화면에서 백그라운드 이동을 멈추고 진행 중인 이동을 드래그로 덮어쓴다', async ({ page }) => {
+  await page.clock.install()
+  await page.goto('/about')
+  await expect(page.getByRole('heading', { name: '장애 대응 실습 소개' })).toBeVisible()
+  await expect(pet(page)).toBeVisible()
+  await page.clock.pauseAt(new Date(await page.evaluate(() => Date.now() + 300)))
+  const initial = await position(pet(page))
+
+  await page.evaluate(() => {
+    Object.defineProperty(document, 'hidden', { configurable: true, value: true })
+    document.dispatchEvent(new Event('visibilitychange'))
+  })
+  await page.clock.runFor(20_000)
+  expect(await position(pet(page))).toEqual(initial)
+  await expect(pet(page)).toHaveAttribute('data-state', 'idle')
+
+  await page.evaluate(() => {
+    Reflect.deleteProperty(document, 'hidden')
+    document.dispatchEvent(new Event('visibilitychange'))
+  })
+  await page.clock.runFor(300)
+  await expect(pet(page)).toHaveAttribute('data-state', 'walking')
+  const cursor = await center(pet(page))
+  await page.mouse.move(cursor.x, cursor.y)
+  await page.mouse.down()
+  await page.mouse.move(2, 2)
+  await expect(pet(page)).toHaveAttribute('data-state', 'surprised')
+  await page.mouse.up()
+  const dropped = await position(pet(page))
+  const sidebar = (await page.getByRole('complementary').boundingBox())!
+  expect(dropped.x).toBeGreaterThanOrEqual(sidebar.x + sidebar.width)
+  await page.clock.runFor(2_000)
+  await expect(pet(page)).toHaveAttribute('data-state', 'idle')
+  expect(await position(pet(page))).toEqual(dropped)
+
+  const nextPage = await center(page.getByRole('link', { name: '내 실습', exact: true }))
+  await page.clock.resume()
+  await page.mouse.click(nextPage.x, nextPage.y)
+  await expect(page).toHaveURL(/\/simulation$/)
+  await expect(pet(page)).toBeVisible()
+  expect(await position(pet(page))).toEqual(dropped)
+})
+
+test('연동 이벤트, 수동 정지, 숨김 설정과 정리된 타이머가 페이지 변경 후에도 동작한다', async ({ page }) => {
+  await page.clock.install()
+  await page.goto('/simulation')
+  await expect(pet(page)).toBeVisible()
+  await page.evaluate(() => window.dispatchEvent(new CustomEvent('dco:companion-command', { detail: { type: 'hint', text: '합성 SOP 메모' } })))
+  await expect(pet(page)).toHaveAttribute('data-state', 'hint')
+  await expect(page.getByText('합성 SOP 메모')).toBeVisible()
+  await page.evaluate(() => window.dispatchEvent(new CustomEvent('dco:companion-command', { detail: { type: 'state', state: 'thinking' } })))
+  await page.clock.runFor(6_000)
+  await expect(pet(page)).toHaveAttribute('data-state', 'thinking')
+  await expect(page.getByText('합성 SOP 메모')).toHaveCount(0)
+
+  await page.getByText('컴패니언', { exact: true }).click()
+  await page.getByLabel('애니메이션 정지').check()
+  await expect(animation(page)).toHaveCSS('animation-name', 'none')
+  await page.getByLabel('캐릭터 표시').uncheck()
+  await expect(pet(page)).toBeHidden()
+  await page.getByRole('link', { name: '서비스 소개', exact: true }).click()
+  await expect(page.getByRole('heading', { name: '장애 대응 실습 소개' })).toBeVisible()
+  await expect(pet(page)).toBeHidden()
+  await page.getByText('컴패니언', { exact: true }).click()
+  await expect(page.getByLabel('애니메이션 정지')).toBeChecked()
+  await page.getByLabel('캐릭터 표시').check()
+  await page.getByText('컴패니언', { exact: true }).click()
+  await expect(pet(page)).toBeVisible()
+  const before = await position(pet(page))
+  await page.clock.runFor(30_000)
+  expect(await position(pet(page))).toEqual(before)
+
+  await page.evaluate(() => {
+    document.body.dataset.chatCount = '0'
+    window.addEventListener('dco:companion-chat-requested', () => {
+      document.body.dataset.chatCount = String(Number(document.body.dataset.chatCount) + 1)
+    })
+  })
+  await pet(page).focus()
+  await page.keyboard.press('Enter')
+  await expect(page.locator('body')).toHaveAttribute('data-chat-count', '1')
+
+  await page.goBack()
+  await expect(page).toHaveURL(/\/simulation$/)
+  await expect(pet(page)).toBeVisible()
+  await expect(pet(page)).toHaveAttribute('data-paused', 'true')
+})
+
+test('모션 축소와 누락된 이미지에 대응한다', async ({ page }) => {
+  await page.clock.install()
+  await page.emulateMedia({ reducedMotion: 'reduce' })
+  await page.route(/\/(?:kiro_asset|assets)\/thinking(?:-[^/.]+)?\.png$/, route => route.abort())
+  await page.goto('/simulation')
+  await expect(pet(page)).toBeVisible()
+  await expect(animation(page)).toHaveCSS('animation-name', 'none')
+  const initial = await position(pet(page))
+  await page.clock.runFor(19_000)
+  expect(await position(pet(page))).toEqual(initial)
+
+  await page.evaluate(() => window.dispatchEvent(new CustomEvent('dco:companion-command', { detail: { type: 'state', state: 'thinking' } })))
+  await expect(pet(page)).toHaveAttribute('data-state', 'thinking')
+  await expect(pet(page).locator('img:visible')).toHaveAttribute('data-image-state', 'idle')
+  await page.evaluate(() => window.dispatchEvent(new CustomEvent('dco:companion-command', { detail: { type: 'move', position: { x: -300, y: 9000 } } })))
+  const sidebar = (await page.getByRole('complementary').boundingBox())!
+  expect((await position(pet(page))).x).toBe(sidebar.width + 12)
+  await expect(pet(page)).toHaveAttribute('data-state', 'idle')
+  await expect(page.getByRole('heading', { name: '내 실습', exact: true })).toBeVisible()
+})

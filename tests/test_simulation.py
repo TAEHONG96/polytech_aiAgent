@@ -142,6 +142,76 @@ def test_concurrent_start(accounts, keys, expected):
 
 
 @POSTGRES
+def test_switch_preserves_work_and_resumes_same_run(accounts):
+    with TestClient(app) as alice, TestClient(app) as bob:
+        auth = login(alice, accounts[0])
+        bob_auth = login(bob, accounts[1])
+        first = start(alice, auth)
+        assert first.status_code == 201, first.text
+        former_id, former_path = first.json()["id"], first.headers["Location"]
+        ticket, = alice.get(former_path + "/incoming-handover").json()["tickets"]
+        action = {"action_code": "CUSTOM_NOTE", "note": "저장한 장애 관측 메모"}
+        note = alice.post(ticket["ticket_url"] + "/actions", headers={**auth, "Idempotency-Key": "note"}, json=action)
+        assert note.status_code == 201, note.text
+        outgoing = former_path + "/outgoing-handover"
+        draft = alice.put(outgoing, headers=auth, json={
+            "expected_revision": 0, "content": {"summary": "저장한 인계 초안"},
+        })
+        assert draft.status_code == 200, draft.text
+
+        selection = {**SCENARIO, "scenario_version": "1.1", "pause_active_run_id": former_id}
+        stale = start(alice, auth, "switch", {**selection, "pause_active_run_id": str(uuid4())})
+        assert stale.status_code == 409 and stale.json()["error"]["code"] == "SIMULATION_ACTIVE_CHANGED"
+        assert start(alice, auth, "switch", {**selection, "scenario_version": "missing"}).status_code == 404
+        assert alice.get(former_path).json()["status"] == "ACTIVE"
+        switched = start(alice, auth, "switch", selection)
+        assert switched.status_code == 201, switched.text
+        new_id, new_path = switched.json()["id"], switched.headers["Location"]
+        assert new_id != former_id
+        assert start(alice, auth, "switch", selection).json() == switched.json()
+        assert start(alice, auth, "switch", {**selection, "pause_active_run_id": new_id}).status_code == 409
+
+        assert alice.get(former_path).json()["status"] == "PAUSED"
+        assert alice.get(former_path).json()["completed_at"] is None
+        assert alice.get(outgoing).json() == draft.json()
+        assert alice.get(ticket["ticket_url"] + "/actions").json()["activity"] == [note.json()]
+        rejected_note = alice.post(ticket["ticket_url"] + "/actions", headers={**auth, "Idempotency-Key": "paused"}, json=action)
+        assert rejected_note.status_code == 409 and rejected_note.json()["error"]["code"] == "SIMULATION_PAUSED"
+        final_body = {"expected_revision": draft.json()["revision"], "confirm": True}
+        final_headers = {**auth, "Idempotency-Key": "finalize"}
+        finalize = alice.post(outgoing + "/finalize", headers=final_headers, json=final_body)
+        assert finalize.status_code == 409 and finalize.json()["error"]["code"] == "SIMULATION_PAUSED"
+
+        resume_path = former_path + "/resume"
+        resume_body = {"pause_active_run_id": new_id}
+        assert bob.post(resume_path, headers=bob_auth, json=resume_body).status_code == 404
+        assert alice.post(resume_path, headers=auth, json={}).status_code == 409
+        resumed = alice.post(resume_path, headers=auth, json=resume_body)
+        assert resumed.status_code == 200 and resumed.json() == first.json()
+        assert alice.post(resume_path, headers=auth, json=resume_body).json() == resumed.json()
+        assert alice.get(new_path).json()["status"] == "PAUSED"
+        assert alice.get("/api/v1/simulation").json()["active_run_id"] == former_id
+        assert alice.post(outgoing + "/finalize", headers=final_headers, json=final_body).status_code == 200
+        assert alice.post(resume_path, headers=auth, json={}).status_code == 409
+        assert alice.post(new_path + "/resume", headers=auth, json={}).json()["status"] == "ACTIVE"
+
+
+@POSTGRES
+def test_concurrent_switches_keep_one_active_run(accounts):
+    with TestClient(app) as client:
+        auth = login(client, accounts[0])
+        active = start(client, auth).json()["id"]
+
+        def switch(key):
+            with TestClient(app, cookies=client.cookies) as contender:
+                return start(contender, auth, key, {**SCENARIO, "pause_active_run_id": active}).status_code
+
+        with ThreadPoolExecutor(max_workers=2) as pool:
+            assert sorted(pool.map(switch, ("switch-1", "switch-2"))) == [201, 409]
+        assert sorted(row["status"] for row in client.get(BASE).json()["items"]) == ["ACTIVE", "PAUSED"]
+
+
+@POSTGRES
 def test_seed_failure_rolls_back_and_key_can_be_retried(accounts, monkeypatch):
     original = routes.record_event
 
@@ -159,6 +229,10 @@ def test_seed_failure_rolls_back_and_key_can_be_retried(accounts, monkeypatch):
         monkeypatch.setattr(routes, "record_event", original)
         response = start(client, auth)
         assert response.status_code == 201, response.text
+        selection = {**SCENARIO, "pause_active_run_id": response.json()["id"]}
+        monkeypatch.setattr(routes, "record_event", fail)
+        assert start(client, auth, "failed-switch", selection).status_code == 500
+        assert client.get(BASE).json()["items"] == [response.json()]
         with Session(engine()) as db:
             run_id = UUID(response.json()["id"])
             assert db.scalar(select(func.count()).select_from(SimulationRunHost).where(

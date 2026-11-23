@@ -160,6 +160,16 @@ class Toolbox:
         if event.event_type == "virtual_action_performed":
             result = details["result"]
             parts.append(f"수행된 가상 조치: {details['action_code']} · {result['message']}")
+            for observation in result.get("observations", ()):
+                unit = observation.get("unit", "")
+                value = observation["value"]
+                measure = f"{value}{unit}" if value is not None else "미확인"
+                if "before" in observation:
+                    measure = f"{observation['before']}{unit} → {measure}"
+                parts.append(" · ".join(filter(None, (observation["label"], observation.get("target"),
+                                                     observation.get("window"), measure))))
+            if unconfirmed := result.get("unconfirmed"):
+                parts.append("미확인 · " + ", ".join(unconfirmed))
             if result.get("error_code"):
                 parts.append(f"가상 오류 코드: {result['error_code']}")
         elif event.event_type == "training_note":

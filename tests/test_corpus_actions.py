@@ -1,13 +1,18 @@
+import asyncio
 import os
-from uuid import uuid4
+import time
+from uuid import UUID, uuid4
 
 import pytest
 from fastapi.testclient import TestClient
 
+from app.agent.tools import Toolbox
 from app.db import engine
 from app.settings import settings
 from app.simulation.evaluation_rules import grade
+from app.simulation.network_actions import NETWORK_SCENARIO, NETWORK_VERSION
 from main import app
+from tests.corpus_network import SOP_QUERY, SOP_SECTION
 
 
 @pytest.mark.parametrize(("asset", "measurement", "other_measurement"), [
@@ -121,3 +126,109 @@ def test_existing_corpus_options_repeatability_and_guarded_switch():
 
             finalized = write(base + "/outgoing-handover/finalize", {"confirm": True, "expected_revision": 0})
             assert finalized.status_code == 200, finalized.text
+
+
+def test_network_pilot_requires_observed_outcomes_and_authored_handover():
+    def event(seq, code, outcome):
+        return {"id": str(seq), "sequence": seq, "type": "virtual_action_performed",
+                "details": {"action_code": code, "result": {"outcome": outcome}}}
+
+    def verdict(key, *events, note=None, status="in_progress"):
+        ticket = {"key": key, "asset_kind": "network", "status": status, "included": True, "work": [],
+                  "resolution": None, "handover_next_action": "시드의 다음 조치", "handover_note": note, "events": events}
+        return {rule["rule_code"]: rule["result"] for rule in grade(ticket, "report", flexible=True, network_pilot=True)["rules"]}
+
+    switched = event(2, "SWITCH_REDUNDANT_PATH", "VERIFICATION_PENDING")
+    pre_measure = event(1, "MEASURE_PACKET_LOSS", "MEASURED")
+    post_measure = event(3, "MEASURE_PACKET_LOSS", "SERVICE_RECOVERED")
+    assert verdict("ticket-01", pre_measure, switched)["POST_REPAIR_VALIDATION"] == "NOT_MET"
+    assert verdict("ticket-01", switched, event(3, "MEASURE_PACKET_LOSS", "MEASURED"))["POST_REPAIR_VALIDATION"] == "NOT_MET"
+    assert verdict("ticket-01", switched, post_measure)["DOCUMENT_ACCURACY"] == "NOT_MET"
+    assert verdict("ticket-01", switched, post_measure, note="CRC 후속 점검", status="resolved")["HANDOVER_UNRESOLVED"] == "NOT_MET"
+
+    missing = event(1, "COMPARE_PORT_COUNTERS", "MISSING_DATA")
+    request = event(2, "REQUEST_PEER_MEASUREMENT", "REQUEST_RECORDED")
+    assert verdict("ticket-02", missing)["APPROPRIATE_VIRTUAL_ACTION"] == "NOT_MET"
+    assert verdict("ticket-02", request, event(3, "COMPARE_PORT_COUNTERS", "MISSING_DATA"))["APPROPRIATE_VIRTUAL_ACTION"] == "NOT_MET"
+    assert verdict("ticket-02", missing, request)["HANDOVER_UNRESOLVED"] == "NOT_MET"
+    held = verdict("ticket-02", missing, request, note="상대편 담당 · 21:00 KST 재확인")
+    assert held["APPROPRIATE_VIRTUAL_ACTION"] == held["DOCUMENT_ACCURACY"] == held["HANDOVER_UNRESOLVED"] == "PASS"
+    assert held["POST_REPAIR_VALIDATION"] == "NOT_APPLICABLE"
+
+
+@pytest.mark.skipif(engine().url.database != "polytech_training_corpus" or os.getenv("APP_ENV") != "simulation",
+                    reason="Requires the isolated seeded corpus and evaluation worker")
+def test_network_pilot_evidence_from_search_to_evaluation():
+    origin = {"Origin": settings().origin}
+    account = {"username": f"network-qa-{uuid4().hex}", "password": uuid4().hex}
+
+    with TestClient(app, base_url=settings().origin) as client:
+        assert client.post("/api/v1/auth/register", json=account, headers=origin).status_code == 201
+        login = client.post("/api/v1/auth/login", json=account, headers=origin)
+        assert login.status_code == 200
+        auth = {**origin, "X-CSRF-Token": login.json()["csrf_token"]}
+
+        def post(path, body, status=201, key=None):
+            response = client.post(path, headers={**auth, "Idempotency-Key": key or uuid4().hex}, json=body)
+            assert response.status_code == status, response.text
+            return response.json()
+
+        run = post("/api/v1/simulation-runs", {"scenario_key": NETWORK_SCENARIO, "scenario_version": NETWORK_VERSION})
+        base = f'/api/v1/simulation-runs/{run["id"]}'
+        first, second = client.get(base + "/incoming-handover").json()["tickets"]
+        recovery, hold = first["ticket_url"], second["ticket_url"]
+        sop, = client.get(hold).json()["related_sops"]
+        assert f"## {SOP_SECTION}" in client.get(sop["source_url"]).json()["extracted_text"]
+        hits = post(base + "/knowledge/search", {"ticket_id": second["ticket_id"], "source_types": ["SOP"],
+                                                  "query": SOP_QUERY}, status=200)["results"]
+        assert any(hit["source_id"] == sop["id"] and hit["section"] == SOP_SECTION for hit in hits)
+
+        def action(ticket, code, status=201, key=None):
+            return post(ticket + "/actions", {"action_code": code}, status=status, key=key)
+
+        action(recovery, "CHECK_REDUNDANT_PATH")
+        action(recovery, "SWITCH_REDUNDANT_PATH", 409)
+        compared = action(recovery, "COMPARE_PORT_COUNTERS")["result"]
+        assert [entry["value"] for entry in compared["observations"]] == [7, 130, 0]
+        action(recovery, "MEASURE_PACKET_LOSS")
+        switched = action(recovery, "SWITCH_REDUNDANT_PATH")
+        assert switched["result"]["health"] == "verification_pending"
+        assert action(recovery, "RERUN_DIAGNOSTICS")["result"]["health"] == "verification_pending"
+        after = action(recovery, "MEASURE_PACKET_LOSS", key="recovery-measurement")
+        assert action(recovery, "MEASURE_PACKET_LOSS", 200, key="recovery-measurement") == after
+        assert after["result"]["outcome"] == "SERVICE_RECOVERED"
+        loss = after["result"]["observations"][0]
+        assert (loss["before"], loss["value"], loss["unit"], loss["window"]) == (4.0, 0.2, "%", "10분")
+        assert after["result"]["error_code"] == "LINK_FLAP" and after["result"]["unconfirmed"]
+        toolbox = Toolbox(UUID(login.json()["user"]["id"]), UUID(first["ticket_id"]), run_id=UUID(run["id"]))
+        history = asyncio.run(toolbox.execute("get_ticket_history", {"ticket_id": first["ticket_id"]}))
+        assert history.status == "ok" and any("4.0% → 0.2%" in entry["content"] for entry in history.payload["untrusted_data"])
+
+        action(hold, "REQUEST_PEER_MEASUREMENT", 409)
+        missing = action(hold, "COMPARE_PORT_COUNTERS")
+        assert missing["result"]["observations"][-1]["value"] is None
+        assert action(hold, "CHECK_REDUNDANT_PATH")["result"]["outcome"] == "MISSING_DATA"
+        assert action(hold, "SWITCH_REDUNDANT_PATH", 409)["error"]["code"] == "ACTION_PRECONDITION_FAILED"
+        request = action(hold, "REQUEST_PEER_MEASUREMENT")
+        assert request["result"]["outcome"] == "REQUEST_RECORDED"
+        assert client.get(hold + "/actions").json()["activity"][-1] == request
+
+        content = {"summary": "서비스 A 우회 복구, 서비스 B 확인 대기", "open_items": [
+            {"ticket_id": first["ticket_id"], "next_action": "4% → 0.2%. 네트워크팀이 21:00 KST 기존 링크 CRC와 이중화를 확인."},
+            {"ticket_id": second["ticket_id"], "next_action": "로컬 4%. 전환 보류. 상대편 담당이 21:00 KST 양단 표본과 우회 시험을 확인."},
+        ]}
+        draft = client.put(base + "/outgoing-handover", headers=auth, json={"expected_revision": 0, "content": content})
+        assert draft.status_code == 200, draft.text
+        post(base + "/outgoing-handover/finalize", {"confirm": True, "expected_revision": draft.json()["revision"]}, 200)
+        deadline = time.monotonic() + 20
+        while (summary := client.get(base + "/evaluation").json())["rules_status"] in {"PENDING", "PROCESSING"}:
+            assert time.monotonic() < deadline, summary
+            time.sleep(0.25)
+        assert summary["rules_status"] == "READY", summary
+        for ticket, evidence, validation in ((first, after, "PASS"), (second, request, "NOT_APPLICABLE")):
+            result = client.get(f'{base}/evaluation/tickets/{ticket["ticket_id"]}').json()
+            rules = {rule["rule_code"]: rule for rule in result["rule_results"]}
+            assert rules["POST_REPAIR_VALIDATION"]["result"] == validation
+            for code in ("APPROPRIATE_VIRTUAL_ACTION", "DOCUMENT_ACCURACY", "HANDOVER_UNRESOLVED"):
+                assert rules[code]["result"] == "PASS"
+            assert evidence["action_id"] in rules["DOCUMENT_ACCURACY"]["evidence_refs"]

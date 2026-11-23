@@ -71,7 +71,8 @@
 | GET | `/auth/registration` | 교육 가입 활성 여부 조회 | 공개, 캐시 금지 |
 | GET | `/simulation` | 진행 중 회차 및 발행 시나리오의 키·버전·표시 제목 | 로그인 |
 | GET | `/simulation-runs` | 내 실행 이력 목록 | 로그인 |
-| POST | `/simulation-runs` | 새 실행 생성/중복 시작 방지 | ACTIVE 중복 생성 금지 |
+| POST | `/simulation-runs` | 새 실행 생성과 선택적 현재 실행 일시정지 | 사용자당 ACTIVE 한 건 |
+| POST | `/simulation-runs/{run_id}/resume` | 저장된 일시정지 실행 재개 | 소유자, CSRF, 사용자당 ACTIVE 한 건 |
 | GET | `/simulation-runs/{run_id}` | 실행 상세·고정 시작 시각·현재 슬롯 | 소유자 |
 | GET | `/simulation-runs/{run_id}/dashboard` | 홈 요약 | 소유자 |
 | GET | `/simulation-runs/{run_id}/schedule` | 이전/현재/다음 슬롯·4조/2교대 표시 | 소유자 |
@@ -142,7 +143,7 @@ Phase 1 시작 요청의 `Idempotency-Key`는 필수이며 공백 없이 1~128�
 }
 ```
 
-- ACTIVE 실행이 있으면 `status=ACTIVE`와 소유 실행 ID 표시; 과거 완료 기록만 있어도 현재 ACTIVE가 없다면 `NOT_STARTED`로 반환.
+- ACTIVE 실행이 있으면 `status=ACTIVE`와 소유 실행 ID를 반환한다. 현재 ACTIVE가 없으면 `NOT_STARTED`를 반환한다. 시나리오 목록은 현재 실행 상태와 관계없이 제공된다. `GET /simulation-runs`는 `PAUSED`와 `COMPLETED` 기록도 포함한다.
 
 ### 4.3 실행 시작
 
@@ -168,9 +169,11 @@ Phase 1 시작 요청의 `Idempotency-Key`는 필수이며 공백 없이 1~128�
 }
 ```
 
-- 시작은 원자적 시드 복제. 동일 사용자 ACTIVE 복제 금지.
-- 같은 멱등 키와 본문 재시도는 기존 실행을 200으로 반환한다. 같은 키에 다른 시나리오를 요청하거나 ACTIVE 중 다른 키로 새 시작을 요청하면 409다.
+- 현재 실행이 있다면 본문에 `pause_active_run_id`로 요약에서 읽은 실행 ID를 전달해 그 회차를 `PAUSED`로 전환하고 새 회차를 시작한다. 일시정지와 시드 복제를 한 트랜잭션에서 수행한다. 현재 실행 ID를 생략하면 `SIMULATION_ALREADY_ACTIVE`, 다른 ID를 보내면 `SIMULATION_ACTIVE_CHANGED`로 409를 반환한다.
+- 같은 멱등 키와 본문 재시도는 기존 실행을 200으로 반환한다. 시나리오 키·버전 또는 일시정지 대상이 다르면 409를 반환한다.
 - 같은 시나리오 버전/초기 상태 재현 보장.
+
+`POST /api/v1/simulation-runs/{run_id}/resume`의 본문은 `{"pause_active_run_id":"현재 실행 UUID"}` 또는 현재 실행이 없을 때 `{}`다. 소유한 `PAUSED` 회차를 같은 ID로 재개하고, 현재 회차가 있다면 지정된 ID를 검증해 함께 일시정지한다. 대상이 이미 `ACTIVE`라면 200으로 현재 실행을 반환한다. 일시정지된 회차의 조회는 가능하며 변경과 인계 확정은 `SIMULATION_PAUSED` 409다. 평가 예약은 인계 최종 확정 시점에만 발생한다.
 
 ### 4.4 호스트 과거 사고 조회
 
@@ -252,6 +255,8 @@ Phase 1 시작 요청의 `Idempotency-Key`는 필수이며 공백 없이 1~128�
 - 실제 인프라 제어 금지. 반복 호출 시 멱등성/버전 충돌 검증.
 
 Phase 3에서는 `Idempotency-Key`가 필수다. 키의 범위는 실행이며 티켓과 본문을 변경해 재사용하면 409다. 같은 요청의 재전송은 최초 저장 응답을 200으로 반환한다. `expected_version`을 제공하면 현재 티켓 버전을 대조한다. 조치의 매개변수는 카탈로그와 일치해야 하며 선행 조건 미충족은 409다. `CUSTOM_NOTE`는 비어 있지 않은 메모만 받아 `kind: NOTE`, `status: RECORDED`, `result: null`로 반환한다. 수행한 가상 조치는 `kind: ACTION`이며 별도 결과를 저장한다. 자동 티켓 상태 전이는 없다.
+
+네트워크 코퍼스 v1.1의 두 인수 티켓은 일부 조치의 `result`에 `outcome`, `observations`, `unconfirmed`를 추가한다. `observations`에는 `label`, `value`가 있고, 해당하는 경우 `target`, `window`, `unit`, `before`를 제공한다. `value: null`은 미확인을 뜻하며 `0`은 관측값이다. `unconfirmed`는 남은 확인 항목이다. 조회와 재전송은 수행 당시 저장한 값을 반환한다. 가상 전환은 양단 비교와 우회 시험을 요구하며, 표본이 누락된 티켓은 비교 후 `REQUEST_PEER_MEASUREMENT`로 요청을 기록할 수 있다.
 
 같은 경로의 GET 응답은 기존 작업 목록 `items`와 시나리오 카탈로그 `catalog`, 조치·자유 메모의 저장 영수증 `activity`를 반환한다. `GET /simulation-runs/{run_id}/events?after_sequence=0&limit=50`은 실행 내 티켓 감사 이력을 순번 오름차순으로 반환한다. 현재 단계에서 인계 열람과 검색은 상태를 바꾸지 않는다.
 

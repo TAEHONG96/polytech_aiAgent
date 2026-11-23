@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState } from 'react'
 import type { FormEvent } from 'react'
 import { api, ApiError, errorMessage, statuses } from './api'
-import type { Session, Status } from './api'
+import type { Session, SimulationStatus, Status } from './api'
 import { trainingSourceHref } from './training-source'
 
 type Warning = { code: string; ticket_id?: string }
@@ -56,7 +56,7 @@ function Warnings({ base, warnings, titles, completed = true }: {
   ))}</ul></aside>
 }
 
-export function TrainingHandover({ base, session, completed }: { base: string; session: Session; completed: boolean }) {
+export function TrainingHandover({ base, session, status }: { base: string; session: Session; status: SimulationStatus }) {
   const endpoint = base + '/outgoing-handover'
   const [draft, setDraft] = useState<Draft>()
   const [error, setError] = useState<{ title: string; message: string; code?: string }>()
@@ -121,10 +121,12 @@ export function TrainingHandover({ base, session, completed }: { base: string; s
   }
 
   const titles = Object.fromEntries(draft?.items.map(item => [item.id, item.title]) ?? [])
+  const completed = status === 'COMPLETED'
+  const paused = status === 'PAUSED'
   const finalized = completed || draft?.status === 'FINALIZED'
   return <section className="surface" id="outgoing" tabIndex={-1}>
     <div className="training-heading"><h2>다음 Bot에게 인계</h2>{draft && <span className="training-badge">
-      {finalized ? '확정 · 읽기 전용' : '초안'} · 리비전 {draft.revision}</span>}</div>
+      {finalized ? '확정 · 읽기 전용' : paused ? '초안 · 읽기 전용' : '초안'} · 리비전 {draft.revision}</span>}</div>
     {error && <div className="notice" role="alert"><strong>{error.title}</strong><p>{error.message}</p>
       {error.code === 'VERSION_CONFLICT' && <button type="button" className="secondary" onClick={() => setRefresh(value => value + 1)}>최신 보고서 열기</button>}
       {error.code === 'REPORT_SOURCE_CHANGED' && <p>인계 자료를 다시 수집하고 최신 티켓 내용을 확인하세요.</p>}
@@ -132,15 +134,15 @@ export function TrainingHandover({ base, session, completed }: { base: string; s
     </div>}
     {!draft && !error && <p role="status">인계 보고서를 불러오는 중입니다.</p>}
     {draft && <>
-      {finalized ? <>
-        <p>최종 확정 · 리비전 {draft.revision}{draft.finalized_at && ' · ' + date(draft.finalized_at)}</p>
+      {finalized || paused ? <>
+        {finalized && <p>최종 확정 · 리비전 {draft.revision}{draft.finalized_at && ' · ' + date(draft.finalized_at)}</p>}
         <p className="knowledge-text">{draft.content.summary ?? '요약이 비어 있습니다.'}</p>
         {draft.items.length ? <ul className="training-list">{draft.items.map(item => <li key={item.id}>
           <div><a href={base + '/tickets/' + item.id}>{item.title}</a><p>{draft.content.open_items.find(note => note.ticket_id === item.id)?.next_action
             ?? item.next_action ?? '기록된 다음 조치가 없습니다.'}</p></div><span className="training-badge">{statuses[item.status]}</span></li>)}</ul>
           : <p>포함된 티켓이 없습니다.</p>}
-        {!completed && <a href={base + '#evaluation'} onClick={event => { event.preventDefault(); window.location.hash = 'evaluation'; window.location.reload() }}>완료 결과 열기</a>}
-        <a href={`${base}/outgoing-handover/revisions/${draft.revision}`}>확정 리비전 열기</a>
+        {finalized && !completed && <a href={base + '#evaluation'} onClick={event => { event.preventDefault(); window.location.hash = 'evaluation'; window.location.reload() }}>완료 결과 열기</a>}
+        {finalized && <a href={`${base}/outgoing-handover/revisions/${draft.revision}`}>확정 리비전 열기</a>}
       </> : <>
         <p>미해결 티켓이 있어도 확정할 수 있습니다. 확정하면 실습이 종료되고 티켓, 작업, 인계 원본은 읽기 전용이 됩니다.</p>
         <div className="training-handover-step">

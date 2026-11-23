@@ -5,6 +5,7 @@ RUN npm ci --include=optional --no-audit --no-fund --fetch-retries=3 \
     && node --input-type=module -e "await import('rolldown')"
 COPY index.html tsconfig.json vite.config.ts ./
 COPY src ./src
+COPY kiro_asset ./kiro_asset
 
 FROM dependencies AS development
 CMD ["npm", "run", "dev"]

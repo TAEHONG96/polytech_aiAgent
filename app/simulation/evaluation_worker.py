@@ -18,13 +18,15 @@ from app.simulation.evaluation_feedback import explain
 from app.simulation.evaluation_input import ELIGIBLE
 from app.simulation.evaluation_rules import grade
 from app.simulation.models import SimulationEvaluation as Evaluation, SimulationRun, SimulationTicketEvaluation as Entry
+from app.simulation.network_actions import NETWORK_RULE_VERSION
 
 logger = logging.getLogger(__name__)
 STAGES = ("rules", "explanation")
 MAX_ATTEMPTS = 3
 LEASE = timedelta(seconds=120)
 RULE_VERSIONS = {"dco-basic-1.0": grade, "dco-basic-1.1": grade,
-                 "synthetic-corpus-1": partial(grade, flexible=True)}
+                 "synthetic-corpus-1": partial(grade, flexible=True),
+                 NETWORK_RULE_VERSION: partial(grade, flexible=True, network_pilot=True)}
 
 
 @dataclass(frozen=True)

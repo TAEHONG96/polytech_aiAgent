@@ -62,6 +62,7 @@ def frozen_input(db: Session, run: SimulationRun, now: datetime, items: list[dic
             "next_action": ticket.next_action, "impact": ticket.impact,
             "work": work[ticket.id], "events": timeline, "included": tid in selected,
             "handover_next_action": open_items.get(tid) or (ticket.next_action if tid in selected else None),
+            "handover_note": open_items.get(tid),
             "warnings": [entry["code"] for entry in warnings if entry.get("ticket_id") == tid],
             "activity_status": "ATTEMPTED" if any(event["type"] in ATTEMPTS for event in timeline) else "NOT_ATTEMPTED",
         })

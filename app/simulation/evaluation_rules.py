@@ -14,7 +14,7 @@ RULES = {
 }
 
 
-def grade(ticket: dict, report_id: str, *, flexible: bool = False) -> dict:
+def grade(ticket: dict, report_id: str, *, flexible: bool = False, network_pilot: bool = False) -> dict:
     timeline = ticket["events"]
     performed = [event for event in timeline if event["type"] == "virtual_action_performed"]
     by_id = {event["id"]: event for event in performed}
@@ -33,6 +33,9 @@ def grade(ticket: dict, report_id: str, *, flexible: bool = False) -> dict:
 
     def code(event):
         return event["details"].get("action_code")
+
+    def outcome(event):
+        return (event["details"].get("result") or {}).get("outcome")
 
     diagnostic_codes = {"CHECK_SERVER_STATUS", "RUN_BMC_DIAGNOSTICS"}
     if flexible:
@@ -65,7 +68,15 @@ def grade(ticket: dict, report_id: str, *, flexible: bool = False) -> dict:
     ]
     supported_decisions = [event for event in performed if code(event) in DECISIONS
                            and any(check["sequence"] < event["sequence"] for check in diagnosed)] if flexible else []
-    if flexible and not interventions and not supported_decisions and ticket["status"] not in RESOLVED:
+    pilot_ticket = ticket["key"] if network_pilot else None
+    if pilot_ticket == "ticket-02":
+        missing = [event for event in diagnosed if code(event) == "COMPARE_PORT_COUNTERS" and outcome(event) == "MISSING_DATA"]
+        requests = [event for event in performed if code(event) == "REQUEST_PEER_MEASUREMENT"
+                    and outcome(event) == "REQUEST_RECORDED" and any(check["sequence"] < event["sequence"] for check in missing)]
+        supported_decisions = missing + requests if requests and not interventions and ticket["status"] not in RESOLVED else []
+    elif pilot_ticket == "ticket-01":
+        supported_decisions = []
+    elif flexible and not interventions and not supported_decisions and ticket["status"] not in RESOLVED:
         supported_decisions = diagnosed if ticket["included"] and ticket["handover_next_action"] else []
     justified = interventions or supported_decisions
     applies = flexible or bool(action_code)
@@ -78,6 +89,8 @@ def grade(ticket: dict, report_id: str, *, flexible: bool = False) -> dict:
         if code(last) == "SWITCH_REDUNDANT_PATH":
             validation_code = "MEASURE_PACKET_LOSS" if asset == "network" else "MEASURE_STORAGE_LATENCY"
         after = [event for event in performed if code(event) == validation_code and event["sequence"] > last["sequence"]]
+        if pilot_ticket == "ticket-01":
+            after = [event for event in after if outcome(event) in {"SERVICE_RECOVERED", "SERVICE_IMPAIRED"}]
     emit("POST_REPAIR_VALIDATION", "NOT_APPLICABLE" if not interventions else "PASS" if after else "NOT_MET",
          event_refs(interventions + after))
     tasks = [task for task in ticket["work"] if task["note"] or task["status"] == "done"]
@@ -85,10 +98,16 @@ def grade(ticket: dict, report_id: str, *, flexible: bool = False) -> dict:
     proof = event_refs(after or performed) + [ref("work", task["id"]) for task in tasks]
     if ticket["handover_next_action"]:
         proof.append(ref("handover", report_id))
-    emit("DOCUMENT_ACCURACY", "PASS" if (after or supported_decisions) and recorded else "NOT_MET" if proof else "NOT_OBSERVED", proof)
+    documented = (after or supported_decisions) and recorded
+    if pilot_ticket in {"ticket-01", "ticket-02"}:
+        documented = (after or supported_decisions) and ticket["included"] and bool(ticket.get("handover_note"))
+    emit("DOCUMENT_ACCURACY", "PASS" if documented else "NOT_MET" if proof else "NOT_OBSERVED", proof)
     pending = [task for task in ticket["work"] if task["status"] != "done"]
     handoff_required = ticket["status"] not in RESOLVED or bool(pending)
     handoff_passed = ticket["included"] and bool(ticket["handover_next_action"])
+    if pilot_ticket in {"ticket-01", "ticket-02"}:
+        handoff_required = True
+        handoff_passed = ticket["status"] not in RESOLVED and ticket["included"] and bool(ticket.get("handover_note"))
     handoff_refs = [ref("handover", report_id)] + [ref("work", task["id"]) for task in pending] if handoff_required else []
     emit("HANDOVER_UNRESOLVED", "NOT_APPLICABLE" if not handoff_required else "PASS" if handoff_passed else "NOT_MET",
          handoff_refs)

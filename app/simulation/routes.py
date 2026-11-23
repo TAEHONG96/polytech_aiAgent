@@ -14,7 +14,7 @@ from app.knowledge.indexing import sync_ticket_index
 from app.knowledge.models import SopDocument
 from app.models import Ticket
 from app.settings import settings
-from app.simulation.access import OwnedRun, WritableRun
+from app.simulation.access import OwnedRun, WritableRun, find_run
 from app.simulation.models import Scenario, ScenarioHost, ScenarioShiftSlot, ScenarioTicketTemplate, SimulationRun, SimulationRunHost
 from app.tickets import (Scope, Severity, TicketCreate, TicketStatus, TicketUpdate, Transition, archive, edit_ticket,
                          insert_ticket, record_event, select_ticket_page, ticket_by_id, transition_ticket, view)
@@ -22,8 +22,12 @@ from app.tickets import (Scope, Severity, TicketCreate, TicketStatus, TicketUpda
 router = APIRouter(tags=["simulation"])
 
 
-class StartRun(BaseModel):
+class SwitchRun(BaseModel):
     model_config = ConfigDict(extra="forbid")
+    pause_active_run_id: UUID | None = None
+
+
+class StartRun(SwitchRun):
     scenario_key: Annotated[str, StringConstraints(min_length=1, max_length=64)]
     scenario_version: Annotated[str, StringConstraints(min_length=1, max_length=32)]
 
@@ -35,10 +39,34 @@ def education_label(value: str) -> str:
     return "[교육용]" + value.removeprefix("[합성]") if value.startswith("[합성]") else value
 
 
-def active_run(db: Database, user_id: UUID) -> SimulationRun | None:
-    return db.scalar(select(SimulationRun).where(
+def active_run(db: Database, user_id: UUID, *, lock: bool = False) -> SimulationRun | None:
+    query = select(SimulationRun).where(
         SimulationRun.user_id == user_id, SimulationRun.status == "ACTIVE",
-    ))
+    )
+    return db.scalar(query.with_for_update() if lock else query)
+
+
+def lock_run_selection(db: Database, user_id: UUID) -> None:
+    # Serialize starts and resumes without granting the runtime role UPDATE on users.
+    db.execute(text("SELECT pg_advisory_xact_lock(hashtextextended(:owner, 0))"),
+               {"owner": f"simulation-start:{user_id}"})
+
+
+def run_to_pause(db: Database, user_id: UUID, expected_id: UUID | None) -> SimulationRun | None:
+    current = active_run(db, user_id, lock=True)
+    current_id = current.id if current else None
+    if current_id == expected_id:
+        return current
+    if expected_id is None:
+        raise ApiError(409, "SIMULATION_ALREADY_ACTIVE", "진행 중인 실습이 있습니다.", {"run_id": str(current_id)})
+    raise ApiError(409, "SIMULATION_ACTIVE_CHANGED", "진행 중인 실습이 변경되었습니다. 목록을 확인한 뒤 다시 선택하세요.",
+                   {"run_id": str(current_id) if current_id else None})
+
+
+def pause_run(db: Database, run: SimulationRun | None) -> None:
+    if run is not None:
+        run.status = "PAUSED"
+        db.flush()
 
 
 def schedule(db: Database, scenario: Scenario) -> list[dict]:
@@ -152,22 +180,20 @@ def summary(db: Database, user: CurrentUser) -> dict:
 
 @router.post("/simulation-runs", status_code=201)
 def start(body: StartRun, key: StartKey, response: Response, db: Database, user: WriteUser) -> dict:
-    # Serialize starts for one user without granting the runtime role UPDATE on users.
-    db.execute(text("SELECT pg_advisory_xact_lock(hashtextextended(:owner, 0))"),
-               {"owner": f"simulation-start:{user.id}"})
+    lock_run_selection(db, user.id)
     previous = db.scalar(select(SimulationRun).where(
         SimulationRun.user_id == user.id, SimulationRun.start_request_key == key,
     ))
     if previous is not None:
         scenario = db.get(Scenario, previous.scenario_id)
-        if (scenario.scenario_key, scenario.version) != (body.scenario_key, body.scenario_version):
-            raise ApiError(409, "IDEMPOTENCY_KEY_REUSED", "같은 키에 다른 시나리오를 요청할 수 없습니다.")
+        if (scenario.scenario_key, scenario.version, previous.start_paused_run_id) != (
+            body.scenario_key, body.scenario_version, body.pause_active_run_id,
+        ):
+            raise ApiError(409, "IDEMPOTENCY_KEY_REUSED", "같은 키에 다른 실습 시작 정보를 사용할 수 없습니다.")
         response.status_code = 200
         return run_view(db, previous)
 
-    current = active_run(db, user.id)
-    if current is not None:
-        raise ApiError(409, "SIMULATION_ALREADY_ACTIVE", "진행 중인 실습이 있습니다.", {"run_id": str(current.id)})
+    current = run_to_pause(db, user.id, body.pause_active_run_id)
     scenario = db.scalar(select(Scenario).where(
         Scenario.scenario_key == body.scenario_key, Scenario.version == body.scenario_version,
         Scenario.is_published.is_(True),
@@ -176,11 +202,28 @@ def start(body: StartRun, key: StartKey, response: Response, db: Database, user:
         raise ApiError(404, "SCENARIO_NOT_FOUND", "발행된 시나리오를 찾을 수 없습니다.")
 
     run = SimulationRun(id=uuid4(), user_id=user.id, scenario_id=scenario.id, status="ACTIVE", start_request_key=key,
-                        started_at=datetime.now(timezone.utc), incoming_report_snapshot={})
+                        start_paused_run_id=body.pause_active_run_id, started_at=datetime.now(timezone.utc),
+                        incoming_report_snapshot={})
     result = run_view(db, run)
+    pause_run(db, current)
     clone_seed(db, run, scenario)
     db.commit()
     response.headers["Location"] = f"/api/v1/simulation-runs/{run.id}"
+    return result
+
+
+@router.post("/simulation-runs/{run_id}/resume")
+def resume(run_id: UUID, body: SwitchRun, db: Database, user: WriteUser) -> dict:
+    lock_run_selection(db, user.id)
+    run = find_run(db, run_id, user.id, lock=True)
+    if run.status == "ACTIVE":
+        return run_view(db, run)
+    if run.status != "PAUSED":
+        raise ApiError(409, "SIMULATION_COMPLETED", "완료된 회차는 실습 목록에서 새로 시작할 수 있습니다.")
+    pause_run(db, run_to_pause(db, user.id, body.pause_active_run_id))
+    run.status = "ACTIVE"
+    result = run_view(db, run)
+    db.commit()
     return result
 
 
