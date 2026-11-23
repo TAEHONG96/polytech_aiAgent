@@ -4,7 +4,7 @@ import { api, errorMessage } from './api'
 import type { Session, Ticket } from './api'
 import { displayDate, shiftLabel, TicketHistory, workStatuses } from './handover'
 import type { Event, Shift, Work } from './handover'
-import { ErrorNotice } from './ui'
+import { ErrorNotice, Feedback } from './ui'
 
 interface Operator { id: string; name: string; team_ids: string[] }
 interface IncomingHandover { summary: string; tickets: { ticket_id: string }[] }
@@ -39,6 +39,7 @@ export function TicketOperations({ ticket, session, onVersion, trainingPath = ''
   const [editing, setEditing] = useState<Work | 'new' | null>(null)
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState('')
+  const [saved, setSaved] = useState('')
   const path = trainingPath + '/tickets/' + ticket.id
   const team = shifts.find(shift => shift.id === shiftId)?.team_id
   const locked = readOnly || !!ticket.archived_at
@@ -78,6 +79,7 @@ export function TicketOperations({ ticket, session, onVersion, trainingPath = ''
     if (!data) return
     setBusy(true)
     setError('')
+    setSaved('')
     try {
       const result = await api<Operations>(path + endpoint, {
         method, body: JSON.stringify({ expected_version: data.version, ...payload }),
@@ -85,6 +87,7 @@ export function TicketOperations({ ticket, session, onVersion, trainingPath = ''
       setData(result)
       setEditing(null)
       onVersion(result.version)
+      if (trainingPath) setSaved(endpoint === '/operations' ? '업무 정보를 저장했습니다.' : '작업 기록을 저장했습니다.')
     } catch (failure) { setError(errorMessage(failure)) }
     finally { setBusy(false) }
   }
@@ -174,24 +177,25 @@ export function TicketOperations({ ticket, session, onVersion, trainingPath = ''
   return <section className="surface">
     <h2>{trainingPath ? '작업 이력' : '교대 업무 및 작업 이력'}</h2>
     <ErrorNotice message={error} />
+    {saved && <Feedback kind="success">{saved}</Feedback>}
     {!data && !error && <p role="status">업무 정보를 불러오는 중입니다.</p>}
     {error && <button className="secondary" onClick={() => window.location.reload()}>최신 티켓 불러오기</button>}
     {trainingPath ? <>
-      <section className="handover-actions">
+      <section className="handover-actions training-work-segment">
         <h3>이전 근무조 인수 내역</h3>
         <ErrorNotice message={incomingError} />
         {!incoming && !incomingError && <p role="status">이전 인수 내역을 불러오는 중입니다.</p>}
         {incoming && <p className="knowledge-text">{incoming.tickets.some(link => link.ticket_id === ticket.id)
           ? (incoming.summary || '인수 요약이 없습니다.') : '이전 근무조에서 인수한 내역이 없습니다.'}</p>}
       </section>
-      <section className="handover-actions">
+      <section className="handover-actions training-work-segment">
         <h3>현재 근무조 작업 이력</h3>
         {operations}
         {completed.length > 0 && workList(completed)}
         {task?.status === 'done' && workForm}
         {data && <TicketHistory history={data.history} ticketId={ticket.id} ticketPath={path} />}
       </section>
-      <section className="handover-actions">
+      <section className="handover-actions training-work-segment">
         <h3>다음 근무조 연계 예정</h3>
         {scheduleError ? <ErrorNotice message={scheduleError} /> : <dl className="details">
           <div><dt>인계 대상</dt><dd>{nextShift
