@@ -37,3 +37,5 @@ corpus run --rm --no-deps -T test python -m tests.qa_seed_corpus --apply --verif
 첫 스크립트 실행은 쓰기 없이 개수와 참조를 확인한다. `--apply`는 Fake provider, 루프백 HTTP 출처, 전용 DB와 격리 설정을 검사한 후 적재한다. 문서는 이름·해시·원본 바이트를 비교해 재사용하고, 발행 시나리오는 버전과 콘텐츠 지문을 비교한다. 충돌한 데이터를 발견하면 멈춘다. `--verify`는 전용 QA 교육 계정 하나에서 시나리오별 실행 8건을 생성하거나 재사용해 인수·티켓·SOP·발신 인계를 검사한다. Worker 색인 및 SOP 검색 API를 호출하고, AI 도구가 반환하는 실제 근거도 비교한다.
 
 실습 종료 후 `corpus stop`으로 전용 서비스만 정지한다. 같은 명령으로 다음에 기동하면 데이터를 다시 사용할 수 있다.
+
+공개 HTTPS 실습 주소에서 회원가입을 열려면 실습 전용 환경 파일에 `APP_PUBLIC_TRAINING_REGISTRATION=1`을 추가한 뒤 같은 프로젝트의 API를 재생성한다. 이 설정은 `APP_ENV=simulation`이고 DB가 `polytech_training_corpus`일 때 적용된다. 가입을 닫으려면 값을 `0`으로 바꾸고 같은 방법으로 적용한다.

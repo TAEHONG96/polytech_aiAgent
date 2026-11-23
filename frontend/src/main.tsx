@@ -81,7 +81,7 @@ function Login({ onLogin, path }: { onLogin: (session: Session) => void; path: s
       {(!joining || registration) && <form key={String(joining)} onSubmit={submit}>
         <label>사용자명<input name="username" autoComplete="username" maxLength={64} required placeholder="예: trainee-1234" /></label>
         <label>비밀번호<input name="password" type="password" autoComplete={joining ? 'new-password' : 'current-password'}
-          minLength={joining ? 12 : undefined} placeholder={joining ? '12자 이상 입력' : '계정 비밀번호 입력'} required /></label>
+          minLength={joining ? 8 : undefined} placeholder={joining ? '8자 이상 입력' : '계정 비밀번호 입력'} required /></label>
         <button disabled={busy}>{joining ? '교육 계정 만들기' : '로그인'}</button>
       </form>}
       {joining && <p><a href="/login">로그인으로 돌아가기</a></p>}

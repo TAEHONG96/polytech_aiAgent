@@ -91,8 +91,17 @@ def test_registration_privilege_cookie_and_safe_default(monkeypatch):
         assert not settings.__wrapped__().training_registration
         config.setenv("APP_ORIGIN", "http://127.0.0.1:18159")
         assert settings.__wrapped__().training_registration
+        config.setenv("APP_ORIGIN", "https://public.example")
+        config.setenv("APP_ENV", "simulation")
+        config.setenv("APP_DB_NAME", "polytech_training_corpus")
+        config.delenv("APP_PUBLIC_TRAINING_REGISTRATION", raising=False)
+        assert not settings.__wrapped__().training_registration
+        config.setenv("APP_PUBLIC_TRAINING_REGISTRATION", "1")
+        assert settings.__wrapped__().training_registration
+        config.setenv("APP_DB_NAME", "polytech")
+        assert not settings.__wrapped__().training_registration
     name = f"Trainee-{uuid4().hex}"
-    body = {"username": name, "password": PASS}
+    body = {"username": name, "password": "test8Pwd"}
     with TestClient(app) as who:
         capability = request(who, "GET", "/api/v1/auth/registration", 200)
         assert capability.json() == {"enabled": False} and capability.headers["Cache-Control"] == "no-store"
@@ -100,12 +109,12 @@ def test_registration_privilege_cookie_and_safe_default(monkeypatch):
         monkeypatch.setattr(auth_module, "settings", lambda: replace(settings(), training_registration=True))
         assert request(who, "GET", "/api/v1/auth/registration", 200).json() == {"enabled": True}
         request(who, "POST", REGISTER, 403, headers={"Origin": "https://invalid.example"}, json=body)
-        request(who, "POST", REGISTER, 422, headers=ORIGIN, json={**body, "password": "short"})
+        request(who, "POST", REGISTER, 422, headers=ORIGIN, json={**body, "password": "test7Pw"})
         request(who, "POST", REGISTER, 422, headers=ORIGIN, json={**body, "role": "operator"})
         request(who, "POST", REGISTER, 201, headers=ORIGIN, json=body)
         request(who, "POST", REGISTER, 409, headers=ORIGIN, json={**body, "username": name.upper()})
         request(who, "POST", REGISTER, 409, headers=ORIGIN, json={**body, "username": USER})
-        authenticated = logged_in(who, name.lower(), PASS, "trainee")
+        authenticated = logged_in(who, name.lower(), body["password"], "trainee")
         request(who, "POST", REGISTER, 409, headers=ORIGIN, json={**body, "username": name + "another"})
         for endpoint in ("/tickets", "/sops", "/handovers", "/handover-operators", "/shift-instances",
                          f"/agent/runs/{uuid4()}"):

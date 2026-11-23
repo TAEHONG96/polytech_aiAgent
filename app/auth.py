@@ -34,7 +34,7 @@ class RegistrationInput(BaseModel):
     username: Annotated[str, StringConstraints(
         strip_whitespace=True, min_length=3, max_length=64, pattern=r"^[a-zA-Z0-9][a-zA-Z0-9_.-]*$",
     )]
-    password: Annotated[str, StringConstraints(min_length=12, max_length=128)]
+    password: Annotated[str, StringConstraints(min_length=8, max_length=128)]
 
 
 def token_hash(token: str) -> str:

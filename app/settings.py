@@ -20,7 +20,8 @@ class Settings:
 
 @lru_cache
 def settings() -> Settings:
-    production = os.environ.get("APP_ENV") == "production"
+    environment = os.environ.get("APP_ENV")
+    production = environment == "production"
     origin = os.environ.get("APP_ORIGIN", "http://127.0.0.1:8080")
     csrf_secret = os.environ.get("APP_CSRF_SECRET", "local-demo-csrf-secret")
     parsed = urlsplit(origin)
@@ -36,6 +37,12 @@ def settings() -> Settings:
     if production and (parsed.scheme != "https" or len(csrf_secret) < 32):
         raise ValueError("Production requires an HTTPS origin and a 32-character CSRF secret")
 
+    database_name = os.environ.get("APP_DB_NAME", "polytech")
+    loopback = parsed.hostname in {"127.0.0.1", "localhost", "::1"}
+    public_corpus_registration = (
+        environment == "simulation" and database_name == "polytech_training_corpus"
+        and parsed.scheme == "https" and os.environ.get("APP_PUBLIC_TRAINING_REGISTRATION") == "1"
+    )
     return Settings(
         database_url=URL.create(
             drivername="postgresql+psycopg",
@@ -43,14 +50,14 @@ def settings() -> Settings:
             password=os.environ.get("APP_DB_PASSWORD", "local-runtime-password"),
             host=os.environ.get("APP_DB_HOST", "db"),
             port=int(os.environ.get("APP_DB_PORT", "5432")),
-            database=os.environ.get("APP_DB_NAME", "polytech"),
+            database=database_name,
         ),
         origin=origin,
         csrf_secret=csrf_secret,
         secure_cookie=parsed.scheme == "https",
         training_registration=(
             not production
-            and parsed.hostname in {"127.0.0.1", "localhost", "::1"}
             and os.environ.get("APP_TRAINING_REGISTRATION") == "1"
+            and (loopback or public_corpus_registration)
         ),
     )

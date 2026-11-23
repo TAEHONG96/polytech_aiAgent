@@ -15,6 +15,7 @@ services:
       <<: *corpus-env
       AGENT_PROVIDER: fake
       APP_TRAINING_REGISTRATION: "1"
+      APP_PUBLIC_TRAINING_REGISTRATION: ${APP_PUBLIC_TRAINING_REGISTRATION:-0}
   worker:
     environment:
       <<: *corpus-env
