@@ -45,15 +45,20 @@ function Login({ onLogin, path }: { onLogin: (session: Session) => void; path: s
 
   async function submit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault()
-    setBusy(true)
     setError('')
-    const form = Object.fromEntries(new FormData(event.currentTarget))
+    const form = new FormData(event.currentTarget)
+    const credentials = { username: form.get('username'), password: form.get('password') }
+    if (joining && credentials.password !== form.get('password_confirmation')) {
+      setError('비밀번호와 비밀번호 확인이 일치하지 않습니다.')
+      return
+    }
+    setBusy(true)
     try {
       if (joining) {
-        await api('/auth/register', { method: 'POST', body: JSON.stringify(form) })
+        await api('/auth/register', { method: 'POST', body: JSON.stringify(credentials) })
         setCreated(true)
       } else {
-        onLogin(await api<Session>('/auth/login', { method: 'POST', body: JSON.stringify(form) }))
+        onLogin(await api<Session>('/auth/login', { method: 'POST', body: JSON.stringify(credentials) }))
       }
     } catch (failure) {
       setError(errorMessage(failure))
@@ -82,6 +87,8 @@ function Login({ onLogin, path }: { onLogin: (session: Session) => void; path: s
         <label>사용자명<input name="username" autoComplete="username" maxLength={64} required placeholder="예: trainee-1234" /></label>
         <label>비밀번호<input name="password" type="password" autoComplete={joining ? 'new-password' : 'current-password'}
           minLength={joining ? 8 : undefined} placeholder={joining ? '8자 이상 입력' : '계정 비밀번호 입력'} required /></label>
+        {joining && <label>비밀번호 확인<input name="password_confirmation" type="password" autoComplete="new-password"
+          required placeholder="위 비밀번호를 다시 입력" /></label>}
         <button disabled={busy}>{joining ? '교육 계정 만들기' : '로그인'}</button>
       </form>}
       {joining && <p><a href="/login">로그인으로 돌아가기</a></p>}

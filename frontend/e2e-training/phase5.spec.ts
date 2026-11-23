@@ -26,7 +26,11 @@ async function account(page: Page, join = false) {
   if (join) {
     await page.getByRole('link', { name: '교육 계정 만들기' }).click()
     await page.getByLabel('사용자명').fill(username)
-    await page.getByLabel('비밀번호').fill(password)
+    await page.getByLabel('비밀번호', { exact: true }).fill(password)
+    await page.getByLabel('비밀번호 확인', { exact: true }).fill(password + '-mismatch')
+    await page.getByRole('button', { name: '교육 계정 만들기' }).click()
+    await expect(page.getByRole('alert')).toContainText('비밀번호와 비밀번호 확인이 일치하지 않습니다.')
+    await page.getByLabel('비밀번호 확인', { exact: true }).fill(password)
     await page.getByRole('button', { name: '교육 계정 만들기' }).click()
     await expect(page.getByRole('status')).toContainText('교육 계정이 만들어졌습니다')
   } else {

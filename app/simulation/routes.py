@@ -13,6 +13,7 @@ from app.http import ApiError
 from app.knowledge.indexing import sync_ticket_index
 from app.knowledge.models import SopDocument
 from app.models import Ticket
+from app.settings import settings
 from app.simulation.access import OwnedRun, WritableRun
 from app.simulation.models import Scenario, ScenarioHost, ScenarioShiftSlot, ScenarioTicketTemplate, SimulationRun, SimulationRunHost
 from app.tickets import (Scope, Severity, TicketCreate, TicketStatus, TicketUpdate, Transition, archive, edit_ticket,
@@ -28,6 +29,10 @@ class StartRun(BaseModel):
 
 
 StartKey = Annotated[str, Header(alias="Idempotency-Key", min_length=1, max_length=128, pattern=r"^[!-~]+$")]
+
+
+def education_label(value: str) -> str:
+    return "[교육용]" + value.removeprefix("[합성]") if value.startswith("[합성]") else value
 
 
 def active_run(db: Database, user_id: UUID) -> SimulationRun | None:
@@ -77,6 +82,7 @@ def clone_seed(db: Database, run: SimulationRun, scenario: Scenario) -> None:
         fields.pop("incident_key", None)
         fields.pop("sop_refs", None)
         history = fields.pop("observed_history", [])
+        fields["description"] = education_label(fields["description"])
         for field in ("resolved_at", "recheck_at"):
             if fields.get(field) is not None:
                 fields[field] = datetime.fromisoformat(fields[field])
@@ -132,13 +138,14 @@ def clone_seed(db: Database, run: SimulationRun, scenario: Scenario) -> None:
 @router.get("/simulation")
 def summary(db: Database, user: CurrentUser) -> dict:
     run = active_run(db, user.id)
-    scenarios = db.scalars(select(Scenario).where(Scenario.is_published.is_(True)).order_by(
-        Scenario.scenario_key, Scenario.version.desc(),
-    ))
+    catalog = select(Scenario).where(Scenario.is_published.is_(True))
+    if settings().database_url.database == "polytech_training_corpus":
+        catalog = catalog.where(Scenario.scenario_key != "dco-basic")
+    scenarios = db.scalars(catalog.order_by(Scenario.scenario_key, Scenario.version.desc()))
     return {
         "status": "ACTIVE" if run else "NOT_STARTED",
         "active_run_id": run.id if run else None,
-        "available_scenarios": [{"scenario_key": row.scenario_key, "version": row.version, "title": row.title}
+        "available_scenarios": [{"scenario_key": row.scenario_key, "version": row.version, "title": education_label(row.title)}
                                 for row in scenarios],
     }
 
@@ -204,7 +211,10 @@ def hosts(db: Database, run: OwnedRun) -> dict:
 
 
 def training_ticket(ticket: Ticket) -> dict:
-    return {**view(ticket).model_dump(), "scenario_host_id": ticket.scenario_host_id,
+    data = view(ticket).model_dump()
+    if ticket.scenario_ticket_template_id is not None:
+        data["description"] = education_label(ticket.description)
+    return {**data, "scenario_host_id": ticket.scenario_host_id,
             "training_origin": ticket.training_origin}
 
 

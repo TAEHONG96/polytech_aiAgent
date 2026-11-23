@@ -39,3 +39,5 @@ corpus run --rm --no-deps -T test python -m tests.qa_seed_corpus --apply --verif
 실습 종료 후 `corpus stop`으로 전용 서비스만 정지한다. 같은 명령으로 다음에 기동하면 데이터를 다시 사용할 수 있다.
 
 공개 HTTPS 실습 주소에서 회원가입을 열려면 실습 전용 환경 파일에 `APP_PUBLIC_TRAINING_REGISTRATION=1`을 추가한 뒤 같은 프로젝트의 API를 재생성한다. 이 설정은 `APP_ENV=simulation`이고 DB가 `polytech_training_corpus`일 때 적용된다. 가입을 닫으려면 값을 `0`으로 바꾸고 같은 방법으로 적용한다.
+
+공개 가입을 열면 비밀번호와 확인 입력이 일치해야 제출할 수 있다. 전용 환경의 새 실습 목록에서는 기본 `dco-basic` 시나리오를 숨기며 기존 회차는 실습 기록에서 조회할 수 있다.

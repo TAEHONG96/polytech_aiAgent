@@ -190,7 +190,7 @@ def build_scenarios(db, documents):
             history = [{"at": observed.isoformat(), "crew": crew, "observation": f"진단 로그: {diagnostic}"},
                        {"at": (finished or observed).isoformat(), "crew": crew, "observation": f"조치 기록: {performed}"}]
             fields = {
-                "title": subject, "description": f"[합성] {symptom}\n관측 로그: {diagnostic}",
+                "title": subject, "description": f"[교육용] {symptom}\n관측 로그: {diagnostic}",
                 "service": service, "severity": severity, "status": status,
                 "impact": "서비스 기준선 복귀를 확인함" if resolved else
                           ("영향 범위 확인 중" if severity == "P4" else f"합성 {service} 서비스 관측 범위에서 영향 확인"),
@@ -204,14 +204,20 @@ def build_scenarios(db, documents):
             templates.append({"id": identifier(f"{key}/{ticket_key}"), "scenario_id": scenario_id,
                               "scenario_host_id": host_id, "template_key": ticket_key, "initial_ticket": fields,
                               "detected_at": detected, "origin": "CARRYOVER" if previous else "INITIAL"})
-        manifest = hashlib.sha256(json.dumps([config, hosts, templates], sort_keys=True, ensure_ascii=False, default=str).encode())
+        # Preserve the manifest of previously published v1.0 templates through the display-label change.
+        manifest_templates = deepcopy(templates)
+        for template in manifest_templates:
+            fields = template["initial_ticket"]
+            fields["description"] = "[합성]" + fields["description"].removeprefix("[교육용]")
+        manifest = hashlib.sha256(json.dumps([config, hosts, manifest_templates], sort_keys=True,
+                                            ensure_ascii=False, default=str).encode())
         config["corpus_manifest_sha256"] = manifest.hexdigest()
         existing = db.scalar(select(Scenario).where(Scenario.scenario_key == scenario_key, Scenario.version == VERSION))
         if existing:
             require(existing.id == scenario_id and existing.is_published and existing.config == config,
                     f"Published scenario collision: {scenario_key}")
             continue
-        scenario = Scenario(id=scenario_id, scenario_key=scenario_key, version=VERSION, title="[합성] " + title,
+        scenario = Scenario(id=scenario_id, scenario_key=scenario_key, version=VERSION, title="[교육용] " + title,
                             timezone=KST.key, virtual_start_at=start, is_published=False, config=config)
         db.add(scenario)
         db.flush()
@@ -288,6 +294,11 @@ def verify(owner, documents):
             login = client.post("/api/v1/auth/login", json=credentials, headers=auth)
         require(login.status_code == 200 and login.json()["roles"] == ["trainee"], "QA verifier login failed.")
         auth["X-CSRF-Token"] = login.json()["csrf_token"]
+        catalog = client.get("/api/v1/simulation").json()["available_scenarios"]
+        require(all(item["scenario_key"] != "dco-basic" for item in catalog),
+                "Legacy scenarios appeared in the corpus start list.")
+        require(all(item["title"].startswith("[교육용]") for item in catalog if item["scenario_key"].startswith(PREFIX)),
+                "Incorrect education title prefix.")
         searched = set()
         observed = 0
         agent_context_checks = 0
@@ -314,6 +325,7 @@ def verify(owner, documents):
                 path = base + "/tickets/" + ticket["id"]
                 detail = client.get(path).json()
                 refs = detail["related_sops"]
+                require(detail["description"].startswith("[교육용]"), f"{key}: incorrect ticket description prefix.")
                 detected = datetime.fromisoformat(ticket["detected_at"])
                 shift_start = datetime.fromisoformat(slots[1]["starts_at"])
                 previous_start = datetime.fromisoformat(slots[0]["starts_at"])
