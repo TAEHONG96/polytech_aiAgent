@@ -43,9 +43,9 @@ def gaps(ticket: Ticket, work: list[TicketWork]) -> list[dict]:
         if ticket.approval_required is None:
             missing("approval", "approval", "추가 승인이 필요한지 확인해 주세요.")
     for task in pending:
-        if task.owner_id is None:
+        if ticket.simulation_run_id is None and task.owner_id is None:
             missing(f"{task.id}:owner", "work_owner", f"‘{task.title}’ 작업의 담당자를 확인해 주세요.")
-        if task.due_at is None:
+        if ticket.simulation_run_id is None and task.due_at is None:
             missing(f"{task.id}:due", "work_due", f"‘{task.title}’ 작업의 마감 시각을 확인해 주세요.", task.owner_id)
     return items
 
@@ -78,7 +78,8 @@ def collect_snapshot(
     carryover = assigned.ends_at <= shift.starts_at
     assigned_here = Ticket.shift_instance_id == shift.id
     scope = or_(assigned_here, Ticket.shift_instance_id.is_(None), carryover)
-    automatic = and_(scope, or_(active, pending, scheduled, approval, activity))
+    automatic = and_(scope, or_(active, pending) if run_id is not None
+                     else or_(active, pending, scheduled, approval, activity))
 
     rows = db.execute(
         select(Ticket, active.label("active"), pending.label("pending"), scheduled.label("scheduled"),

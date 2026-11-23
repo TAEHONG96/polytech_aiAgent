@@ -165,7 +165,8 @@ function TicketPicker({ items, selected, onChange }: {
     </div>)}
     <ErrorNotice message={error} />
     <form onSubmit={search} className="row handover-actions">
-      <label>추가할 티켓 검색<input value={query} onChange={event => setQuery(event.target.value)} maxLength={200} required /></label>
+      <label>추가할 티켓 검색<input value={query} onChange={event => setQuery(event.target.value)} maxLength={200} required
+        placeholder="예: INC-000123 또는 스토리지 지연" /></label>
       <button className="secondary">검색</button>
     </form>
     {searched && !found.length && <p>검색 결과가 없습니다.</p>}
@@ -286,18 +287,22 @@ export function HandoverDashboard({ session }: { session: Session }) {
 const eventTypes: Record<string, string> = {
   created: '등록', transitioned: '상태 변경', updated: '티켓 수정', archived: '보관',
   operations_updated: '업무 정보 변경', work_created: '작업 등록', work_updated: '작업 수정',
+  scenario_seeded: '실습 티켓 준비', scenario_observation: '실습 시작 전 관측·조치',
 }
 
-export function TicketHistory({ history, ticketId, anchorPrefix = '' }: { history: Event[]; ticketId: string; anchorPrefix?: string }) {
+export function TicketHistory({ history, ticketId, anchorPrefix = '', ticketPath = '/tickets/' + ticketId }: {
+  history: Event[]; ticketId: string; anchorPrefix?: string; ticketPath?: string
+}) {
   return <details className="handover-actions">
     <summary>작업 및 변경 이력 ({history.length})</summary>
     <ol>{history.map(event => <li id={anchorPrefix + 'event-' + event.id} key={event.id}>
       {displayDate(event.created_at)} · {eventTypes[event.type] || event.type} · 버전 {event.version}
+      {event.type === 'scenario_observation' && typeof event.details.crew === 'string' && ' · ' + event.details.crew}
       {typeof event.details.reason === 'string' && <p className="knowledge-text">{event.details.reason}</p>}
       {event.details.after && typeof event.details.after === 'object' && 'title' in event.details.after
         ? <p>{String(event.details.after.title)} · {workStatuses[(event.details.after as Work).status]}</p> : null}
     </li>)}</ol>
-    <a href={'/tickets/' + ticketId}>원본 티켓 열기</a>
+    <a href={ticketPath}>원본 티켓 열기</a>
   </details>
 }
 
@@ -327,16 +332,19 @@ function SavedReport({ content, edit = false, anchorPrefix = '' }: { content: Sa
   const responses = new Map(content.body.gap_responses.map(response => [response.gap_id, response.answer]))
   const notes = new Map(content.body.item_notes.map(entry => [entry.ticket_id, entry]))
   return <>
-    {edit ? <label>인계 요약<textarea name="summary" maxLength={4000} rows={4} defaultValue={content.body.summary || ''} /></label>
+    {edit ? <label>인계 요약<textarea name="summary" maxLength={4000} rows={4} defaultValue={content.body.summary || ''}
+      placeholder="예: 파일 저장 서비스는 복구했고, 스토리지 지연 경보는 계속 관찰 중입니다." /></label>
       : <p className="knowledge-text">{content.body.summary || '운영자 인계 요약이 비어 있습니다.'}</p>}
     {!content.items.length && <p>스냅샷에 포함된 티켓이 없습니다.</p>}
     {content.items.map(item => <article className="agent-evidence" id={anchorPrefix + 'snapshot-' + item.id} key={item.id}>
       <SnapshotItem item={item} anchorPrefix={anchorPrefix} />
       {(['summary', 'followup', 'warnings'] as const).map((field, index) => {
         const label = ['운영자 요약', '운영자 후속 조치', '운영자 주의사항'][index]
+        const example = ['예: 스토리지 응답 지연이 3분간 지속됨', '예: 다음 근무 시작 후 응답 시간을 재측정',
+          '예: 대기열이 정상 범위로 돌아올 때까지 재시작 보류'][index]
         const text = notes.get(item.id)?.[field]
         return edit ? <label key={field} className="handover-actions">{label}
-          <textarea name={field + ':' + item.id} maxLength={4000} rows={2} defaultValue={text || ''} />
+          <textarea name={field + ':' + item.id} maxLength={4000} rows={2} defaultValue={text || ''} placeholder={example} />
         </label> : text && <p key={field} className="knowledge-text"><strong>{label}</strong> {text}</p>
       })}
       {!!item.gaps.length && <div className="handover-actions">
@@ -344,7 +352,7 @@ function SavedReport({ content, edit = false, anchorPrefix = '' }: { content: Sa
         {item.gaps.map(gap => <div key={gap.id} className="work-line">
           {edit ? <label>{gap.question}{gap.requested_from_name && ' · 요청 대상 ' + gap.requested_from_name}
             <textarea name={gap.id} maxLength={4000} rows={2} defaultValue={responses.get(gap.id) || ''}
-              placeholder="답변 또는 미확인 사유" />
+              placeholder="예: 로그 확인 중이며 다음 근무 시작 후 결과를 공유할 예정" />
           </label> : <><p>{gap.question}{gap.requested_from_name && ' · 요청 대상 ' + gap.requested_from_name}</p>
             <p className="knowledge-text">{responses.get(gap.id) || '답변 대기'}</p></>}
         </div>)}

@@ -151,7 +151,8 @@ class Toolbox:
         changes = details.get("changes", {})
         keys = set(changes) & {"title", "description", "severity", "status", "impact", "next_action", "resolution", "archived_at"}
         transition = changes.get("status", {})
-        parts = [f"{event.created_at.isoformat()} · {event.event_type}", f"변경 필드: {', '.join(sorted(keys)) or '없음'}"]
+        label = "실습 시작 전 관측·조치" if event.event_type == "scenario_observation" else event.event_type
+        parts = [f"{event.created_at.isoformat()} · {label}", f"변경 필드: {', '.join(sorted(keys)) or '없음'}"]
         if transition:
             parts.append(f"상태: {transition.get('before')} → {transition.get('after')}")
         if reason := details.get("reason"):

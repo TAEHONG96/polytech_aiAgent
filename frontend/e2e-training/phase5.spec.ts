@@ -68,7 +68,12 @@ async function finalize(page: Page) {
 
 async function action(page: Page, label: string, message: RegExp) {
   const actions = page.locator('#actions')
-  await actions.getByRole('button', { name: label, exact: true }).click()
+  const button = actions.getByRole('button', { name: label, exact: true })
+  const card = actions.locator('.training-tile').filter({ has: page.getByRole('button', { name: label, exact: true }) })
+  await button.click()
+  await expect(card.getByText('수행 완료', { exact: true })).toBeVisible()
+  await expect(card.getByText(message)).toBeVisible()
+  await expect(button).toBeDisabled()
   await expect(actions.locator('ol').getByText(message)).toBeVisible()
 }
 
@@ -106,6 +111,9 @@ test('실제 가상 조치와 정상 재진단 뒤 저장된 티켓을 해결한
   const target = await ticket(page)
   await memoryActions(page)
   await action(page, '재진단', /가상 재진단을 통과했습니다/)
+  await page.reload()
+  await expect(page.locator('.training-actions').getByRole('button', { name: '재진단', exact: true })).toBeDisabled()
+  await expect(page.locator('.training-actions').getByText('가상 재진단을 통과했습니다.')).toBeVisible()
   const heading = page.locator('#ticket-summary')
   await heading.getByText('티켓 상태 변경', { exact: true }).click()
   for (const state of ['in_progress', 'resolved']) {

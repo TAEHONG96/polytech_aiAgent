@@ -1,0 +1,30 @@
+name: polytech-qa-synthetic-corpus
+
+x-corpus-env: &corpus-env
+  APP_DB_NAME: polytech_training_corpus
+  APP_ENV: simulation
+
+services:
+  db:
+    environment:
+      POSTGRES_DB: polytech_training_corpus
+  migrate:
+    environment: *corpus-env
+  api:
+    environment:
+      <<: *corpus-env
+      AGENT_PROVIDER: fake
+      APP_TRAINING_REGISTRATION: "1"
+  worker:
+    environment:
+      <<: *corpus-env
+      AGENT_PROVIDER: fake
+      GEMINI_API_KEY: ""
+  test:
+    environment:
+      <<: *corpus-env
+      CORPUS_PROJECT: polytech-qa-synthetic-corpus
+      GEMINI_API_KEY: ""
+      APP_TRAINING_REGISTRATION: "1"
+    volumes:
+      - sop_files:/var/lib/polytech/sops

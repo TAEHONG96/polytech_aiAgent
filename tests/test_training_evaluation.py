@@ -180,16 +180,31 @@ def test_real_actions_and_learning_evidence_rule_results(students):
     storage = pair["CARRYOVER"]
     path = run + "/tickets/" + storage["id"]
     incident, = request(alice, "GET", path + "/host-incidents", 200).json()["incidents"]
+    historical = request(alice, "GET", incident["source_url"], 200).json()
+    assert historical["ticket_key"] == "INC-HIST-000011"
+    assert historical["service"] == "storage" and historical["asset_kind"] == "storage"
+    assert historical["host"]["host_key"] == "ASSET-001" and historical["error_code"] == "STORAGE_LATENCY"
     evidence = {"kind": "HOST_HISTORY", "activity": "VIEWED", "source_id": incident["id"]}
+    options_path = path + "/learning-evidence/actions"
+    params = {"kind": evidence["kind"], "source_id": evidence["source_id"]}
+    early = submit(alice, headers, path, "CHECK_SERVER_STATUS", 201)
+    assert request(alice, "GET", options_path, 200, params=params).json() == {"viewed": False, "linked": False, "items": []}
     request(alice, "POST", path + "/learning-evidence", 201, headers=headers, json=evidence)
     memo = submit(alice, headers, path, "CUSTOM_NOTE", 201, note="교체했다는 자유 기록")
     request(alice, "POST", path + "/learning-evidence", 422, headers=headers, json={
         **evidence, "activity": "USED", "action_event_id": memo["action_id"],
     })
     action = submit(alice, headers, path, "RUN_BMC_DIAGNOSTICS", 201, params={"target": "storage"})
+    options = request(alice, "GET", options_path, 200, params=params).json()
+    assert options["viewed"] and not options["linked"]
+    assert [item["action_id"] for item in options["items"]] == [action["action_id"]]
+    request(alice, "POST", path + "/learning-evidence", 422, headers=headers, json={
+        **evidence, "activity": "USED", "action_event_id": early["action_id"],
+    })
     request(alice, "POST", path + "/learning-evidence", 201, headers=headers, json={
         **evidence, "activity": "USED", "action_event_id": action["action_id"],
     })
+    assert request(alice, "GET", options_path, 200, params=params).json() == {"viewed": True, "linked": True, "items": []}
     submit(alice, headers, path, "CHECK_STORAGE", 201)
     submit(alice, headers, path, "RERUN_DIAGNOSTICS", 201)
     own_memory = run + "/tickets/" + pair["INITIAL"]["id"]
@@ -229,6 +244,44 @@ def test_archived_seed_ticket_is_still_evaluated(students):
     assert info["final_status"] == "closed"
     assert any(rule["rule_code"] == "APPROPRIATE_VIRTUAL_ACTION" and rule["result"] == "NOT_OBSERVED"
                for rule in info["rule_results"])
+
+
+def test_impact_warning_and_resolved_ticket_handover_selection(students):
+    (alice, headers, run, _), _ = students
+    seeded = tickets(alice, run)
+    initial = seeded["INITIAL"]
+    target = run + "/tickets/" + initial["id"]
+    carryover = seeded["CARRYOVER"]
+    work = request(alice, "POST", run + "/tickets/" + carryover["id"] + "/work", 201, headers=headers, json={
+        "expected_version": carryover["version"], "title": "스토리지 지연 재확인", "status": "todo",
+        "owner_id": None,
+    }).json()["work"][0]
+    assert work["owner_id"] is None
+    draft = collect(alice, headers, run)
+    assert "WORK_OWNER_MISSING" not in {warning["code"] for warning in draft["warnings"]}
+    carryover_item = next(item for item in draft["items"] if item["id"] == carryover["id"])
+    assert work["id"] in {task["id"] for task in carryover_item["work"]}
+    assert "work_owner" not in {gap["field"] for gap in carryover_item["gaps"]}
+
+    def missing_impact(report):
+        return any(warning["ticket_id"] == initial["id"] for warning in report["warnings"]
+                   if warning["code"] == "MISSING_IMPACT")
+
+    assert missing_impact(draft)
+    updated = request(alice, "PATCH", target, 200, headers=headers, json={
+        "expected_version": initial["version"], "impact": "합성 컴퓨팅 서비스 영향",
+    }).json()
+    draft = collect(alice, headers, run, draft["revision"])
+    assert not missing_impact(draft)
+    for state in ("in_progress", "resolved"):
+        body = {"expected_version": updated["version"], "to_status": state, "reason": "합성 상태 검증"}
+        if state == "resolved":
+            body["resolution"] = "합성 분석 결과"
+        updated = request(alice, "POST", target + "/transitions", 200, headers=headers, json=body).json()
+    draft = collect(alice, headers, run, draft["revision"])
+    assert initial["id"] not in {item["id"] for item in draft["items"]}
+    finalize(alice, headers, run, 200, revision=draft["revision"])
+    assert detail(alice, run, initial["id"])["final_status"] == "resolved"
 
 
 def test_worker_expired_lease_stale_publisher_and_explanation_retry(students, data_owner):

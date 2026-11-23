@@ -193,10 +193,6 @@ def collect_warnings(db: Session, run: SimulationRun, content: DraftContent, ite
         location = {"ticket_id": str(task.ticket_id), "work_id": str(task.id)}
         if str(task.ticket_id) not in included:
             warnings.append({"code": "PENDING_WORK_NOT_INCLUDED", **location})
-        if task.owner_id is None:
-            warnings.append({"code": "WORK_OWNER_MISSING", **location})
-        if task.due_at is None:
-            warnings.append({"code": "WORK_DUE_MISSING", **location})
     return warnings
 
 
@@ -229,7 +225,10 @@ def final_sources(db: Session, run: SimulationRun, report: Handover) -> tuple[di
     except (ValidationError, KeyError, TypeError, ValueError, AttributeError, IndexError) as exc:
         raise structurally_invalid from exc
     stale = versions != baseline if baseline is not None else any(versions.get(tid) != version for tid, version in item_versions.items())
-    if stale:
+    manually_included = {str(ticket_id) for ticket_id in selection.include_ticket_ids}
+    has_finished_item = any(item["status"] in RESOLVED and item["id"] not in manually_included
+                            and all(task["status"] == "done" for task in item["work"]) for item in items)
+    if stale or has_finished_item:
         raise ApiError(409, "REPORT_SOURCE_CHANGED", "티켓 원본이 변경되었습니다. 자료를 다시 수집하세요.")
     return data, content, items
 

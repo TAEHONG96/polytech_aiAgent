@@ -23,7 +23,11 @@ type Source = {
   title?: string
   occurred_at?: string
   resolution?: string
-  error_code?: string
+  error_code?: string | null
+  ticket_key?: string | null
+  service?: string | null
+  asset_kind?: string | null
+  host?: { hostname: string; host_key: string } | null
   extracted_text?: string | null
   original_url?: string
   revision?: number
@@ -35,7 +39,8 @@ export function TrainingSource({ path }: { path: string }) {
   const base = runPath.exec(path)![0]
   const [source, setSource] = useState<Source>()
   const [error, setError] = useState('')
-  const section = path.includes('/incident-sources/') ? '호스트 과거 장애' : path.includes('/sops/') ? '승인 SOP' : '확정 인계 리비전'
+  const incident = path.includes('/incident-sources/')
+  const section = incident ? '호스트 과거 장애 · 읽기 전용' : path.includes('/sops/') ? '승인 SOP' : '확정 인계 리비전'
   useEffect(() => {
     const controller = new AbortController()
     api<Source>(path, { signal: controller.signal }).then(setSource)
@@ -43,14 +48,29 @@ export function TrainingSource({ path }: { path: string }) {
     return () => controller.abort()
   }, [path])
   return <>
-    <nav className="training-nav" aria-label="근거 탐색"><a href={base}>근무·티켓 목록</a><a href={base + '#evaluation'}>실습 결과</a></nav>
+    <nav className="training-nav" aria-label="근거 탐색"><a href={base}>근무·티켓 목록</a>
+      {source?.original_url && <a href={base + '/sops'}>SOP 목록</a>}
+      {incident && <a href={path.split('/incident-sources/')[0] + '#incidents'}>현재 티켓의 과거 장애 목록</a>}
+      <a href={base + '#evaluation'}>실습 결과</a></nav>
     <article className="surface">
       <p className="training-context">{section}</p>
       <h1>{source?.title ?? (source?.revision ? `인계 리비전 ${source.revision}` : '실습 근거')}</h1>
       {error && <p className="notice" role="alert">{error}</p>}
       {!source && !error && <p role="status">근거를 확인하는 중입니다.</p>}
-      {source?.occurred_at && <p>발생 {new Date(source.occurred_at).toLocaleString('ko-KR', { timeZone: 'Asia/Seoul' })} KST {source.error_code && `· ${source.error_code}`}</p>}
-      {source?.resolution && <p className="knowledge-text">{source.resolution}</p>}
+      {incident && source && <>
+        <h2>장애 개요</h2>
+        <dl className="details">
+          <div><dt>티켓 키</dt><dd><code>{source.ticket_key ?? '미등록'}</code></dd></div>
+          <div><dt>서비스</dt><dd>{source.service ?? '미등록'}</dd></div>
+          <div><dt>호스트명</dt><dd>{source.host?.hostname ?? '미등록'}</dd></div>
+          <div><dt>호스트 키</dt><dd>{source.host?.host_key ?? '미등록'}</dd></div>
+          <div><dt>장애 분류</dt><dd>{source.asset_kind === 'memory' ? '메모리' : source.asset_kind === 'storage' ? '스토리지' : (source.asset_kind ?? '미등록')}</dd></div>
+          <div><dt>장애 코드</dt><dd><code>{source.error_code ?? '미등록'}</code></dd></div>
+          <div><dt>발생 시각</dt><dd>{source.occurred_at
+            ? new Date(source.occurred_at).toLocaleString('ko-KR', { timeZone: 'Asia/Seoul' }) + ' KST' : '미등록'}</dd></div>
+        </dl>
+        <h2>당시 조치 결과</h2><p className="knowledge-text">{source.resolution || '기록 없음'}</p>
+      </>}
       {source?.original_url && <p><a href={source.original_url}>SOP 원본 열기</a></p>}
       {source?.extracted_text && <div className="knowledge-text">{source.extracted_text}</div>}
       {source?.content && <>

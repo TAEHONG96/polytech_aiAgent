@@ -187,7 +187,7 @@ export function AgentPage({ session }: { session: Session }) {
           value={message} onChange={e => setMessage(e.target.value)}
           placeholder="예: 서버가 POST 진단에서 멈추는 원인을 분석해줘" /></label>
         <div className="fields">
-          <label>티켓 검색<input value={ticketQuery} onChange={e => setTicketQuery(e.target.value)} placeholder="번호, 제목 또는 서비스" /></label>
+          <label>티켓 검색<input value={ticketQuery} onChange={e => setTicketQuery(e.target.value)} placeholder="예: INC-000123 또는 메모리 경보" /></label>
           <label>연결할 티켓<select value={ticket} onChange={e => setTicket(e.target.value)}>
             <option value="">선택 안 함</option>
             {ticket && !ticketOptions.some(item => item.id === ticket) && <option value={ticket}>선택한 티켓 ({ticket})</option>}

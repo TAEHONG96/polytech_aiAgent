@@ -69,7 +69,7 @@
 |---|---|---|---|
 | POST | `/auth/register` | 계정 등록 | 비로그인·보안 검증 |
 | GET | `/auth/registration` | 교육 가입 활성 여부 조회 | 공개, 캐시 금지 |
-| GET | `/simulation` | 현재 사용자의 시작 가능/ACTIVE/최근 완료 요약 | 로그인 |
+| GET | `/simulation` | 진행 중 회차 및 발행 시나리오의 키·버전·표시 제목 | 로그인 |
 | GET | `/simulation-runs` | 내 실행 이력 목록 | 로그인 |
 | POST | `/simulation-runs` | 새 실행 생성/중복 시작 방지 | ACTIVE 중복 생성 금지 |
 | GET | `/simulation-runs/{run_id}` | 실행 상세·고정 시작 시각·현재 슬롯 | 소유자 |
@@ -82,7 +82,7 @@
 | GET | `/simulation-runs/{run_id}/tickets/{ticket_id}/incident-sources/{incident_id}` | 승인 사고 출처 조회. 부모 티켓의 시나리오 범위·발생 전 조건 재검사 | 소유자 |
 | GET | `/simulation-runs/{run_id}/tickets` | 현재 실행 티켓 목록, 보관 범위·커서 | 소유자 |
 | POST | `/simulation-runs/{run_id}/tickets` | `open` 사용자 생성 티켓 등록. 상세 규칙 평가 범위에서는 제외 | ACTIVE |
-| GET | `/simulation-runs/{run_id}/tickets/{ticket_id}` | 티켓 상세 | 소유자 |
+| GET | `/simulation-runs/{run_id}/tickets/{ticket_id}` | 티켓 상세. SOP가 연결된 템플릿은 승인된 링크 목록 `related_sops`도 반환 | 소유자 |
 | PATCH | `/simulation-runs/{run_id}/tickets/{ticket_id}` | 기존 필드·메모/버전 편집. 상태 전이는 전이 경로 사용 | ACTIVE |
 | DELETE | `/simulation-runs/{run_id}/tickets/{ticket_id}` | `closed` 티켓 보관. 기존 버전·보관 의미 유지 | ACTIVE |
 | POST | `/simulation-runs/{run_id}/tickets/{ticket_id}/transitions` | 기존 상태값·전이·해결 요약 제약 적용 | ACTIVE |
@@ -99,7 +99,7 @@
 | POST | `/simulation-runs/{run_id}/knowledge/search` | 승인 SOP·범위 내 해결 티켓 RAG. 공통 과거 사고 검색에는 대상 티켓 필요 | 소유자 |
 | GET | `/simulation-runs/{run_id}/outgoing-handover` | 초안·인계 후보·경고·리비전 또는 확정본·고정 경고 조회 | 소유자 |
 | POST | `/simulation-runs/{run_id}/outgoing-handover/generate` | 기존 비동기 초안 기능 실행 범위에 맞게 재사용 | ACTIVE·202 가능 |
-| PUT | `/simulation-runs/{run_id}/outgoing-handover` | 초안 저장·스냅샷 재수집·수동 후보 선택, 리비전 반환 | ACTIVE |
+| PUT | `/simulation-runs/{run_id}/outgoing-handover` | 초안 저장·스냅샷 재수집·수동 후보 선택, 리비전 반환. 기본 후보는 미해결 티켓과 미완료 작업이 있는 티켓 | ACTIVE |
 | GET | `/simulation-runs/{run_id}/outgoing-handover/revisions/{version}` | 동일 실행의 보고서 리비전 | 소유자 |
 | POST | `/simulation-runs/{run_id}/outgoing-handover/finalize` | 유일한 교육 확정 경로. 확정+COMPLETED+평가 예약 | 최초 ACTIVE, 동일 요청 재전송 허용 |
 | GET | `/simulation-runs/{run_id}/evaluation` | 규칙·설명 상태, 평가 대상 기준 종합 요약 | COMPLETED |
@@ -183,6 +183,7 @@ Phase 1 시작 요청의 `Idempotency-Key`는 필수이며 공백 없이 1~128�
     {
       "incident_id":"737e9ea7-a6ea-4cec-8db0-19b05dab240e",
       "incident_key":"SYN-032",
+      "ticket_key":"INC-HIST-000012",
       "occurred_at":"2026-10-20T09:30:00+09:00",
       "error_code":"MEM_ECC_ERROR",
       "summary":"메모리 ECC 오류",
@@ -194,8 +195,10 @@ Phase 1 시작 요청의 `Idempotency-Key`는 필수이며 공백 없이 1~128�
 }
 ```
 
-- 예시는 가상 데이터다. 서버는 소유 실행의 대상 티켓에서 호스트·시나리오 버전·`detected_at`를 취한다. 승인된 합성 자료 중 같은 호스트이고 `occurred_at < ticket.detected_at`인 자료만 반환한다. 같은 시각의 사고도 제외한다.
-- 호스트가 없는 유효 티켓의 응답은 `host: null`, `incidents: []`다. 출처 링크의 서버 조회에서도 시나리오·승인·발생 전 조건을 다시 적용한다. 호스트 목록 자체는 사고 이력을 반환하지 않는다.
+- 예시는 가상 데이터다. 서버는 소유 실행의 대상 티켓에서 호스트·시나리오 버전·`detected_at`를 취한다. 승인된 합성 자료 중 같은 호스트이고 `occurred_at < ticket.detected_at`인 자료만 반환한다. 티켓 템플릿의 `initial_ticket.incident_key`와 같은 사고 키를 가진 자료는 조회·검색·출처 열기에서 제외한다.
+- 호스트가 없는 유효 티켓의 응답은 `host: null`, `incidents: []`다. 출처 링크의 서버 조회에서도 시나리오·승인·발생 전 조건을 다시 적용한다. 호스트 목록 자체는 사고 이력을 반환하지 않는다. `ticket_key`는 합성 과거 티켓에 부여한 참조 키이며, 참조 키가 등록되지 않은 사고에는 `null`을 반환한다.
+- 과거 장애 상세는 사건의 `error_code`와 당시 `resolution`, 발행 시나리오의 호스트명·호스트 키·자산 분류를 제공한다. 합성 서비스는 자산 분류에서 매핑하며 매핑이 없는 경우 `null`이다.
+- `GET /simulation-runs/{run_id}/tickets/{ticket_id}/learning-evidence/actions?kind=HOST_HISTORY&source_id=...`는 자료 확인 여부(`viewed`), 활용 연결 여부(`linked`), 확인 후 대상 티켓에서 수행한 연결 가능한 가상 조치(`items`)를 반환한다. `kind=SOP`도 지원한다.
 
 ### 4.5 AI 분석 시작 및 폴링
 
@@ -279,6 +282,7 @@ Phase 3에서는 `Idempotency-Key`가 필수다. 키의 범위는 실행이며 �
 - `expected_revision`은 교육 계약의 편집 버전이며 기존 서비스의 보고서 버전에 매핑할 수 있다. 초안 저장·재수집은 리비전에 남긴다. 입력 형식·참조 검증 결과와 업무 경고를 구별한다.
 - AI 생성 전에 `GET`으로 빈 유효 초안과 스냅샷·리비전을 읽을 수 있다. `PUT`의 `refresh_snapshot`은 실행 자료를 다시 수집하고, `selection`으로 같은 실행의 티켓을 수동 포함·제외할 수 있다. 저장·재수집 응답은 최신 리비전과 경고를 반환한다. AI 작업 완료를 기다리지 않고 초안을 재수집할 수 있어야 한다.
 - `summary`·`open_items`의 구체 DTO는 현행 보고서 형식과 대조해 확정한다. 빈 업무 내용은 저장할 수 있고 값이 제공된 경우 타입과 참조 형식을 검증한다. 생성 초안의 완료 작업은 수행 기록으로 입증할 수 있어야 한다.
+- 실습의 미완료 작업은 다음 근무조로 넘기며 개인 담당자는 인수 후 배정한다. 담당자가 비어 있는 미완료 작업에는 인계 경고를 생성하지 않는다.
 
 ### 4.9 인계 확정 = 실습 종료
 

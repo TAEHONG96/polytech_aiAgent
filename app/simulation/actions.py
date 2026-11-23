@@ -15,6 +15,7 @@ from app.http import ApiError
 from app.knowledge.indexing import sync_ticket_index
 from app.models import Ticket, TicketEvent
 from app.simulation.access import OwnedRun, WritableRun
+from app.simulation.corpus_actions import SCENARIOS as CORPUS_SCENARIOS, options as corpus_options
 from app.simulation.learning import learning_source
 from app.simulation.models import LearningEvent, Scenario, SimulationRunHost
 from app.simulation.routes import StartKey
@@ -40,9 +41,16 @@ def run_host(db: Database, ticket: Ticket) -> SimulationRunHost:
 
 
 def rules(db: Database, ticket: Ticket, host: SimulationRunHost) -> dict:
-    catalog = db.get(Scenario, ticket.scenario_id).config.get("action_catalog", [])
+    scenario = db.get(Scenario, ticket.scenario_id)
+    catalog = scenario.config.get("action_catalog", [])
     asset = host.state.get("asset_kind")
-    return {item["code"]: (item["label"], item["variants"][asset]) for item in catalog if asset in item["variants"]}
+    result = {item["code"]: (item["label"], item["variants"][asset]) for item in catalog if asset in item["variants"]}
+    if scenario.scenario_key in CORPUS_SCENARIOS and scenario.version == "1.0":
+        result = {code: (label, {**rule, "repeatable": code != "REPLACE_MEMORY"}) for code, (label, rule) in result.items()}
+        if scenario.scenario_key in {"synthetic-ops-major", "synthetic-ops-recovery"} and asset != "incident":
+            result.update(corpus_options({**host.state, "asset_kind": "incident"}))
+        result.update(corpus_options(host.state))
+    return result
 
 
 def blocking_reason(state: dict, rule: dict) -> str | None:
@@ -65,16 +73,18 @@ def receipt(event: TicketEvent) -> dict:
 def actions(ticket_id: UUID, db: Database, run: OwnedRun) -> dict:
     ticket = ticket_by_id(db, ticket_id, run_id=run.id)
     host = run_host(db, ticket)
-    catalog = []
-    for code, (label, rule) in rules(db, ticket, host).items():
-        reason = blocking_reason(host.state, rule)
-        catalog.append({"action_code": code, "label": label, "parameters": rule.get("parameter", {}),
-                        "available": run.status == "ACTIVE" and ticket.archived_at is None and reason is None,
-                        "blocked_reason": reason})
     events = db.scalars(select(TicketEvent).where(
         TicketEvent.simulation_run_id == run.id, TicketEvent.ticket_id == ticket.id,
         TicketEvent.event_type.in_((ACTION, MEMO)),
-    ).order_by(TicketEvent.event_sequence))
+    ).order_by(TicketEvent.event_sequence)).all()
+    completed = {event.details["action_code"] for event in events if event.event_type == ACTION}
+    catalog = []
+    for code, (label, rule) in rules(db, ticket, host).items():
+        reason = ("이미 수행한 조치입니다." if rule.get("once") and code in completed else blocking_reason(host.state, rule))
+        catalog.append({"action_code": code, "label": label, "parameters": rule.get("parameter", {}),
+                        "available": run.status == "ACTIVE" and ticket.archived_at is None and reason is None,
+                        "blocked_reason": reason, "repeatable": rule.get("repeatable", False),
+                        "requires_note": rule.get("requires_note", False)})
     return {"items": operations(db, ticket)["work"], "catalog": catalog, "activity": [receipt(event) for event in events]}
 
 
@@ -107,6 +117,13 @@ def perform(ticket_id: UUID, body: ActionInput, key: StartKey, response: Respons
         _, rule = entry
         if parameters != rule.get("parameter", {}):
             raise ApiError(422, "INVALID_ACTION_PARAMETERS", "카탈로그의 조치 매개변수를 확인하세요.")
+        if rule.get("requires_note") and not body.note:
+            raise ApiError(422, "ACTION_NOTE_REQUIRED", "확인한 사실이나 인계할 위험을 입력하세요.")
+        if rule.get("once") and db.scalar(select(TicketEvent.id).where(
+            TicketEvent.ticket_id == ticket.id, TicketEvent.event_type == ACTION,
+            TicketEvent.details["action_code"].astext == body.action_code,
+        ).limit(1)) is not None:
+            raise ApiError(409, "ACTION_ALREADY_PERFORMED", "이미 수행한 조치입니다.")
         if reason := blocking_reason(host.state, rule):
             raise ApiError(409, "ACTION_PRECONDITION_FAILED", reason)
         if changes := rule.get("set"):

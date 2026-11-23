@@ -4,6 +4,7 @@ import logging
 from collections import Counter
 from dataclasses import dataclass
 from datetime import timedelta
+from functools import partial
 from threading import Event
 from uuid import UUID, uuid4
 
@@ -22,7 +23,8 @@ logger = logging.getLogger(__name__)
 STAGES = ("rules", "explanation")
 MAX_ATTEMPTS = 3
 LEASE = timedelta(seconds=120)
-RULE_VERSIONS = {"dco-basic-1.0": grade, "dco-basic-1.1": grade}
+RULE_VERSIONS = {"dco-basic-1.0": grade, "dco-basic-1.1": grade,
+                 "synthetic-corpus-1": partial(grade, flexible=True)}
 
 
 @dataclass(frozen=True)

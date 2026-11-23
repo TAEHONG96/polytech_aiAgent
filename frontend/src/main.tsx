@@ -79,9 +79,9 @@ function Login({ onLogin, path }: { onLogin: (session: Session) => void; path: s
       {joining && registration === undefined && <p role="status">가입 가능 여부를 확인하는 중입니다.</p>}
       {joining && registration === false && <p>현재 교육 계정 가입이 닫혀 있습니다.</p>}
       {(!joining || registration) && <form key={String(joining)} onSubmit={submit}>
-        <label>사용자명<input name="username" autoComplete="username" maxLength={64} required /></label>
+        <label>사용자명<input name="username" autoComplete="username" maxLength={64} required placeholder="예: trainee-1234" /></label>
         <label>비밀번호<input name="password" type="password" autoComplete={joining ? 'new-password' : 'current-password'}
-          minLength={joining ? 12 : undefined} required /></label>
+          minLength={joining ? 12 : undefined} placeholder={joining ? '12자 이상 입력' : '계정 비밀번호 입력'} required /></label>
         <button disabled={busy}>{joining ? '교육 계정 만들기' : '로그인'}</button>
       </form>}
       {joining && <p><a href="/login">로그인으로 돌아가기</a></p>}
@@ -144,7 +144,7 @@ function TicketList() {
       <div className="row heading"><h1>장애 티켓</h1><a className="button" href="/tickets/new">새 티켓</a></div>
       <section className="surface">
         <form className="filters" action="/tickets">
-          <label>검색<input name="q" maxLength={200} defaultValue={search.get('q') ?? ''} placeholder="제목, 서비스, 티켓 번호" /></label>
+          <label>검색<input name="q" maxLength={200} defaultValue={search.get('q') ?? ''} placeholder="예: INC-000123 또는 스토리지 지연" /></label>
           <label>상태<select name="status" defaultValue={search.get('status') ?? ''}>
             <option value="">전체</option>
             {Object.entries(statuses).map(([code, label]) => <option value={code} key={code}>{label}</option>)}
@@ -219,15 +219,18 @@ function TicketForm({ session, ticket }: { session: Session; ticket?: Ticket }) 
       <h1>{ticket ? ticket.number + ' 수정' : '새 티켓'}</h1>
       <ErrorNotice message={error} />
       <form onSubmit={submit}>
-        <label>제목<input name="title" maxLength={160} required defaultValue={ticket?.title} /></label>
-        <label>증상<textarea rows={4} name="description" maxLength={10000} required defaultValue={ticket?.description} /></label>
+        <label>제목<input name="title" maxLength={160} required defaultValue={ticket?.title} placeholder="예: 스토리지 응답 지연" /></label>
+        <label>증상<textarea rows={4} name="description" maxLength={10000} required defaultValue={ticket?.description}
+          placeholder="예: 스토리지 요청 응답에 평소보다 3초 더 걸리고 지연 경보가 발생함" /></label>
         <div className="fields">
-          <label>영향 서비스<input name="service" maxLength={80} required defaultValue={ticket?.service} /></label>
+          <label>영향 서비스<input name="service" maxLength={80} required defaultValue={ticket?.service} placeholder="예: 파일 저장 서비스" /></label>
           <label>우선순위<select name="severity" defaultValue={ticket?.severity ?? 'P3'}>{priorities.map(priority => <option key={priority}>{priority}</option>)}</select></label>
         </div>
         <label>발생 시각 (KST)<input type="datetime-local" name="detected_at" required defaultValue={initialDetectedAt} /></label>
-        <label>영향 범위<textarea rows={2} name="impact" maxLength={4000} defaultValue={ticket?.impact ?? ''} /></label>
-        <label>다음 조치<textarea rows={2} name="next_action" maxLength={4000} defaultValue={ticket?.next_action ?? ''} /></label>
+        <label>영향 범위<textarea rows={2} name="impact" maxLength={4000} defaultValue={ticket?.impact ?? ''}
+          placeholder="예: 일부 사용자의 파일 저장 요청이 지연됨" /></label>
+        <label>다음 조치<textarea rows={2} name="next_action" maxLength={4000} defaultValue={ticket?.next_action ?? ''}
+          placeholder="예: 스토리지 대기열과 응답 시간을 재확인" /></label>
         {ticket?.status === 'waiting' && <label>재확인 시각 (KST)<input type="datetime-local" name="recheck_at" defaultValue={ticket.recheck_at ? dateInput(ticket.recheck_at) : ''} /></label>}
         <div className="row"><button disabled={busy}>저장</button><a href={ticket ? '/tickets/' + ticket.id : '/tickets'}>취소</a></div>
       </form>
@@ -311,8 +314,9 @@ function TicketDetail({ id, edit, session }: { id: string; edit: boolean; sessio
             <option value="" disabled>선택</option>
             {ticket.allowed_transitions.map(status => <option key={status} value={status}>{statuses[status]}</option>)}
           </select></label>
-          <label>변경 사유<textarea name="reason" rows={2} required maxLength={4000} /></label>
-          {target === 'resolved' && <label>해결 요약<textarea name="resolution" rows={2} required maxLength={4000} /></label>}
+          <label>변경 사유<textarea name="reason" rows={2} required maxLength={4000} placeholder="예: 응답 시간이 정상 범위로 돌아와 해결로 변경" /></label>
+          {target === 'resolved' && <label>해결 요약<textarea name="resolution" rows={2} required maxLength={4000}
+            placeholder="예: 대기열을 정리하고 파일 저장 요청이 정상 처리되는 것을 확인" /></label>}
           <div className="row">
             <button disabled={busy || !target}>상태 저장</button>
             {ticket.status === 'closed' && <button className="secondary" type="button" onClick={archive} disabled={busy}>티켓 보관</button>}

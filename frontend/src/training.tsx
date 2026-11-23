@@ -3,6 +3,7 @@ import { api, errorMessage } from './api'
 import type { Session } from './api'
 import { TrainingWorkspace } from './training-workspace'
 import { TrainingSource, isTrainingSource } from './training-source'
+import { TrainingSopList } from './training-sops'
 
 interface Run {
   id: string
@@ -15,10 +16,11 @@ interface Run {
 
 interface Summary {
   active_run_id: string | null
-  available_scenarios: { scenario_key: string; version: string }[]
+  available_scenarios: { scenario_key: string; version: string; title?: string }[]
 }
 
 export function TrainingPage({ path, session }: { path: string; session: Session }) {
+  if (/^\/simulation-runs\/[\da-f-]{36}\/sops$/i.test(path)) return <TrainingSopList path={path} />
   if (isTrainingSource(path)) return <TrainingSource path={path} />
   const route = /^\/simulation-runs\/([0-9a-f-]{36})(?:\/tickets\/([0-9a-f-]{36}))?$/i.exec(path)
   return route ? <TrainingWorkspace runId={route[1]} ticketId={route[2]} session={session} />
@@ -85,7 +87,7 @@ function TrainingHome({ session }: { session: Session }) {
           <h2>{history.length ? '새 실습 또는 재실습' : '새 실습'}</h2>
           {summary.available_scenarios.length ? <div className="training-grid">{summary.available_scenarios.map(scenario => (
             <article className="training-tile" key={`${scenario.scenario_key}-${scenario.version}`}>
-              <h3>{scenario.scenario_key === 'dco-basic' ? '데이터센터 장애 대응' : scenario.scenario_key}</h3>
+              <h3>{scenario.title ?? scenario.scenario_key}</h3>
               <p className="meta">{scenario.scenario_key} · v{scenario.version}</p>
               <button disabled={pending} onClick={() => void start(scenario)}>{scenario.scenario_key} v{scenario.version} 시작</button>
             </article>

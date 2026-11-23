@@ -13,7 +13,7 @@ from app.knowledge.embedding import GEMINI_SEARCH_PROFILE, EmbeddingFailure, che
 from app.knowledge.indexing import RESOLVED_STATUSES
 from app.knowledge.models import IndexJob, IndexStatus, KnowledgeChunk, SopDocument, SourceType
 from app.models import Ticket
-from app.simulation.models import ScenarioIncident
+from app.simulation.models import ScenarioIncident, ScenarioTicketTemplate
 
 
 _worker_client_lock = Lock()
@@ -73,8 +73,12 @@ def calibrated_min_score(profile: str) -> float | None:
 
 
 def incident_scope(ticket: Ticket):
+    same_incident = select(ScenarioTicketTemplate.id).where(
+        ScenarioTicketTemplate.id == ticket.scenario_ticket_template_id,
+        ScenarioTicketTemplate.initial_ticket["incident_key"].astext == ScenarioIncident.incident_key,
+    ).exists()
     return (ScenarioIncident.scenario_id == ticket.scenario_id, ScenarioIncident.approved.is_(True),
-            ScenarioIncident.occurred_at < ticket.detected_at)
+            ScenarioIncident.occurred_at < ticket.detected_at, ~same_incident)
 
 
 def search_index(

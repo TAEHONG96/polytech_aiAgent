@@ -13,14 +13,26 @@ const kst = new Intl.DateTimeFormat('ko-KR', {
 })
 const date = (value: string) => kst.format(new Date(value))
 const origin = { INITIAL: '초기', CARRYOVER: '이월', USER_CREATED: '직접 등록' }
-type TrainingTicket = Ticket & { training_origin: keyof typeof origin }
+type TrainingTicket = Ticket & {
+  training_origin: keyof typeof origin; scenario_host_id: string | null
+  related_sops?: { id: string; title: string; source_url: string }[]
+}
+type RunHost = {
+  id: string; hostname: string; host_key: string
+  state: { asset_kind?: string; error_code?: string | null; health?: string }
+}
+const assetLabels: Record<string, string> = { memory: '메모리', storage: '스토리지' }
+const healthLabels: Record<string, string> = { degraded: '성능 저하', verification_pending: '재진단 필요', healthy: '정상' }
 type Run = { status: 'ACTIVE' | 'COMPLETED'; virtual_now: string; scenario: { key: string; version: string } }
 type Slot = { id: string; crew_code: string; type: string; actor_type: string; starts_at: string; ends_at: string }
 type Incoming = { summary: string; tickets: { ticket_id: string }[] }
-type Incident = { id: string; summary: string; occurred_at: string; resolution: string; source_url: string }
+type Incident = { id: string; ticket_key: string | null; summary: string; occurred_at: string; resolution: string; source_url: string }
 type Sop = { id: string; title: string; original_url: string }
 type Hit = { source_id: string; title: string; content: string; source_url: string; section: string | null; page_number: number | null }
-type CatalogAction = { action_code: string; label: string; parameters: Record<string, string>; available: boolean; blocked_reason: string | null }
+type CatalogAction = {
+  action_code: string; label: string; parameters: Record<string, string>; available: boolean
+  blocked_reason: string | null; repeatable?: boolean; requires_note?: boolean
+}
 type Activity = {
   action_id: string; action_code: string; kind: 'ACTION' | 'NOTE'; occurred_at: string
   event_sequence: number; ticket_version: number; note: string | null; result: { message: string; health: string; error_code: string | null } | null
@@ -53,7 +65,8 @@ export function TrainingWorkspace({ runId, ticketId, session }: { runId: string;
   const base = '/simulation-runs/' + runId
   const { data: run, error } = useResource<Run>(base)
   return <>
-    <nav className="training-nav" aria-label="실습 탐색"><a href="/simulation">내 실습</a>{ticketId && <>
+    <nav className="training-nav" aria-label="실습 탐색"><a href="/simulation">내 실습</a>
+      {run && <a href={base + '/sops'}>SOP 목록</a>}{ticketId && <>
       <a href={base}>근무·티켓 목록</a><a href={base + '#outgoing'}>발신 인계</a>
       {run?.status === 'COMPLETED' && <a href={base + '#evaluation'}>평가 결과</a>}
     </>}</nav>
@@ -126,11 +139,16 @@ function TicketWorkspace({ base, ticketId, run, session }: { base: string; ticke
   const path = base + '/tickets/' + ticketId
   const [latestVersion, setVersion] = useState(0)
   const ticket = useResource<TrainingTicket>(path, latestVersion)
+  const hosts = useResource<{ items: RunHost[] }>(base + '/hosts', latestVersion)
   const incidents = useResource<{ incidents: Incident[]; host: { hostname: string; host_key: string } | null }>(path + '/host-incidents')
   useSectionFocus(!!ticket.data)
   if (ticket.error) return <p role="alert">{ticket.error}</p>
   if (!ticket.data) return <p role="status">티켓을 불러오는 중입니다.</p>
   const current = { ...ticket.data, version: Math.max(ticket.data.version, latestVersion) }
+  const host = hosts.data?.items.find(item => item.id === current.scenario_host_id)
+  const asset = host?.state.asset_kind
+  const health = host?.state.health
+  const errorCode = host?.state.error_code
   const readOnly = run.status === 'COMPLETED' || !!current.archived_at
   return <>
     <div className="training-hero"><div><p className="training-context">{current.number} · {current.severity} · {origin[current.training_origin]}</p>
@@ -139,21 +157,43 @@ function TicketWorkspace({ base, ticketId, run, session }: { base: string; ticke
     <nav className="training-nav training-nav-sections" aria-label="티켓 실습 도구">
       <a href="#ticket-summary">장애 개요</a>
       <a href="#incidents">동일 호스트 이력</a><a href="#knowledge">SOP·유사 장애</a>
-      <a href="#analysis">AI 분석</a><a href="#actions">가상 조치</a><a href="#work">작업 기록</a>
+      <a href="#analysis">AI 분석</a><a href="#actions">가상 조치</a><a href="#work">작업 이력</a>
     </nav>
     <section id="ticket-summary" className="surface" tabIndex={-1}>
       <h2>장애 개요</h2><p className="knowledge-text">{current.description}</p>
-      {current.impact && <p>영향 {current.impact}</p>}
+      <dl className="details">
+        <div><dt>티켓 키</dt><dd><code>{current.number}</code></dd></div>
+        <div><dt>티켓 ID</dt><dd><code>{current.id}</code></dd></div>
+        <div><dt>서비스</dt><dd>{current.service}</dd></div>
+        {host && <>
+          <div><dt>호스트명</dt><dd>{host.hostname}</dd></div>
+          <div><dt>호스트 키</dt><dd>{host.host_key}</dd></div>
+          <div><dt>장애 분류</dt><dd>{asset ? (assetLabels[asset] ?? asset) : '미등록'}</dd></div>
+          <div><dt>현재 장애 코드</dt><dd>{errorCode === null ? '오류 없음' : (errorCode ?? '미등록')}</dd></div>
+          <div><dt>현재 호스트 상태</dt><dd>{health ? (healthLabels[health] ?? health) : '미등록'}</dd></div>
+        </>}
+      </dl>
+      {hosts.error ? <p role="alert">호스트 정보 조회 실패. {hosts.error}</p>
+        : !hosts.data ? <p role="status">호스트 정보를 불러오는 중입니다.</p>
+          : !host && <p>연결된 가상 호스트가 없습니다.</p>}
+      {readOnly ? <p>영향 범위: {current.impact ?? '기록 없음'}</p>
+        : <TrainingImpact key={current.id} path={path} ticket={current} session={session} onVersion={setVersion} />}
       {current.resolution && <p>해결 기록 {current.resolution}</p>}
+      {!!current.related_sops?.length && <div>
+        <h3>관련 SOP</h3>
+        <ul>{current.related_sops.map(sop => <li key={sop.id}><a href={trainingSourceHref(sop.source_url)}>{sop.title}</a></li>)}</ul>
+      </div>}
       {!readOnly && <TrainingTransition path={path} ticket={current} session={session} onVersion={setVersion} />}
     </section>
     <section id="incidents" className="surface" tabIndex={-1}>
       <h2>동일 호스트의 과거 장애</h2>
+      <p className="meta">현재 티켓 발생 전에 같은 호스트에서 발생한 승인 사례입니다.</p>
       {incidents.error && <p role="alert">{incidents.error}</p>}
       {!incidents.data && !incidents.error && <p role="status">호스트 이력을 불러오는 중입니다.</p>}
       {incidents.data?.incidents.length === 0 && <p>승인된 과거 장애가 없습니다.</p>}
       <ul className="training-materials">{incidents.data?.incidents.map(item => <li key={item.id}><a href={trainingSourceHref(item.source_url)}>{item.summary}</a>
-        {' · '}{date(item.occurred_at)} KST <p>{item.resolution}</p>
+        {' · '}{date(item.occurred_at)} KST · <code>{item.ticket_key ?? '티켓 키 미등록'}</code>
+        <p>{item.resolution}</p>
         {!readOnly && <LearningControl path={path} kind="HOST_HISTORY" sourceId={item.id} session={session} />}
       </li>)}</ul>
     </section>
@@ -162,6 +202,41 @@ function TicketWorkspace({ base, ticketId, run, session }: { base: string; ticke
     <VirtualActions path={path} version={current.version} session={session} readOnly={readOnly} onVersion={setVersion} />
     <div id="work" tabIndex={-1}><TicketOperations ticket={current} session={session} trainingPath={base} readOnly={readOnly} onVersion={setVersion} /></div>
   </>
+}
+
+function TrainingImpact({ path, ticket, session, onVersion }: {
+  path: string; ticket: TrainingTicket; session: Session; onVersion: (version: number) => void
+}) {
+  const [busy, setBusy] = useState(false)
+  const [message, setMessage] = useState('')
+  const [error, setError] = useState('')
+
+  async function save(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault()
+    const impact = String(new FormData(event.currentTarget).get('impact') ?? '').trim() || null
+    setBusy(true)
+    setMessage('')
+    setError('')
+    try {
+      const updated = await api<TrainingTicket>(path, {
+        method: 'PATCH', body: JSON.stringify({ expected_version: ticket.version, impact }),
+      }, session.csrf_token)
+      onVersion(updated.version)
+      setMessage('영향 범위를 저장했습니다. 인계 초안이 있으면 인계 자료를 다시 수집하세요.')
+    } catch (failure) {
+      setError(errorMessage(failure))
+    } finally {
+      setBusy(false)
+    }
+  }
+
+  return <form onSubmit={save}>
+    <label>영향 범위<textarea name="impact" maxLength={4000} rows={2}
+      placeholder="예: 컴퓨팅 노드 1대에 오류 발생, 사용자 영향 확인 중" defaultValue={ticket.impact ?? ''} /></label>
+    <button className="secondary" disabled={busy}>영향 범위 저장</button>
+    {message && <p role="status">{message}</p>}
+    {error && <p role="alert">{error}</p>}
+  </form>
 }
 
 function TrainingTransition({ path, ticket, session, onVersion }: {
@@ -197,15 +272,17 @@ function TrainingTransition({ path, ticket, session, onVersion }: {
       <label>다음 상태<select required value={target} onChange={event => setTarget(event.target.value as Status | '')}>
         <option value="">선택</option>{ticket.allowed_transitions.map(state => <option key={state} value={state}>{statuses[state]}</option>)}
       </select></label>
-      <label>변경 사유<textarea name="reason" rows={2} maxLength={4000} required /></label>
-      {target === 'resolved' && <label>해결 요약<textarea name="resolution" rows={2} maxLength={4000} required /></label>}
+      <label>변경 사유<textarea name="reason" rows={2} maxLength={4000} required placeholder="예: 재진단에서 오류가 사라져 해결로 변경" /></label>
+      {target === 'resolved' && <label>해결 요약<textarea name="resolution" rows={2} maxLength={4000} required
+        placeholder="예: 가상 메모리 교체 후 재진단에서 정상 확인" /></label>}
       <button disabled={busy || !target}>상태 저장</button>
     </form>
   </details>
 }
 
 type RunEvent = { id: string; ticket_id: string; event_type: string; event_sequence: number; occurred_at: string }
-const eventNames: Record<string, string> = { scenario_seeded: '시나리오 티켓 준비', created: '티켓 등록', updated: '티켓 수정',
+const eventNames: Record<string, string> = { scenario_seeded: '시나리오 티켓 준비', scenario_observation: '실습 시작 전 관측·조치',
+  created: '티켓 등록', updated: '티켓 수정',
   transitioned: '티켓 상태 변경', archived: '티켓 보관', operations_updated: '업무 정보 수정', work_created: '후속 작업 등록',
   work_updated: '후속 작업 변경', learning_evidence: '학습 자료 기록', virtual_action_performed: '가상 조치 수행', training_note: '자유 메모' }
 
@@ -259,7 +336,7 @@ function Knowledge({ base, ticketId, session, readOnly = false }: {
     <form onSubmit={search} className="row">
       <div><label htmlFor="training-source-kind">자료 유형</label>
         <select id="training-source-kind" name="kind"><option value="SOP">승인 SOP</option><option value="CASE">유사 장애</option></select></div>
-      <label>검색어<input name="query" maxLength={300} required /></label>
+      <label>검색어<input name="query" maxLength={300} required placeholder="예: 메모리 ECC 오류 재진단" /></label>
       <button disabled={pending}>검색</button>
     </form>
     {pending && <p role="status">검색 중입니다.</p>}
@@ -283,7 +360,8 @@ function Knowledge({ base, ticketId, session, readOnly = false }: {
 function LearningControl({ path, kind, sourceId, session }: {
   path: string; kind: 'HOST_HISTORY' | 'SOP'; sourceId: string; session: Session
 }) {
-  const [options, setOptions] = useState<Activity[]>()
+  type LearningActions = { viewed: boolean; linked: boolean; items: Pick<Activity, 'action_id' | 'action_code' | 'event_sequence' | 'result'>[] }
+  const [options, setOptions] = useState<LearningActions>()
   const [status, setStatus] = useState('')
   const [error, setError] = useState('')
   const [busy, setBusy] = useState(false)
@@ -294,34 +372,42 @@ function LearningControl({ path, kind, sourceId, session }: {
       await api(path + '/learning-evidence', {
         method: 'POST', body: JSON.stringify({ kind, source_id: sourceId, activity, action_event_id: action }),
       }, session.csrf_token)
+      setOptions(undefined)
       setStatus(activity === 'VIEWED' ? '자료 확인 기록 저장됨' : '자료 활용 기록 저장됨')
     } catch (failure) { setError(errorMessage(failure)) }
     finally { setBusy(false) }
   }
   async function loadActions() {
     setError('')
+    setBusy(true)
     try {
-      const data = await api<{ activity: Activity[] }>(path + '/actions')
-      setOptions(data.activity.filter(entry => entry.kind === 'ACTION'))
+      const query = new URLSearchParams({ kind, source_id: sourceId })
+      setOptions(await api<LearningActions>(path + '/learning-evidence/actions?' + query))
     } catch (failure) { setError(errorMessage(failure)) }
+    finally { setBusy(false) }
   }
   return <div className="row">
-    <button className="secondary" type="button" disabled={busy} onClick={() => void save('VIEWED')}>자료 확인 기록</button>
-    <button className="secondary" type="button" disabled={busy} onClick={() => void loadActions()}>수행한 조치에 연결</button>
+    <p className="meta">자료를 읽었다고 기록한 뒤, 현재 티켓에서 수행한 가상 조치를 연결하세요.</p>
+    <button className="secondary" type="button" disabled={busy} onClick={() => void save('VIEWED')}>이 자료를 읽었어요</button>
+    <button className="secondary" type="button" disabled={busy} onClick={() => void loadActions()}>이 자료를 참고해 조치했어요</button>
     {status && <span role="status">{status}</span>}
     {error && <span role="alert">{error}</span>}
-    {options && (options.length === 0 ? <p>연결할 수행 조치가 없습니다.</p> :
+    {options?.linked && <p>이 자료에 수행 조치를 이미 연결했습니다.</p>}
+    {options && !options.viewed && <p>먼저 ‘이 자료를 읽었어요’를 눌러 확인을 기록하세요.</p>}
+    {options?.viewed && !options.linked && options.items.length === 0 &&
+      <p>자료 확인 후 이 티켓에서 수행한 <a href="#actions">가상 조치</a>가 없습니다.</p>}
+    {options && options.items.length > 0 &&
       <form className="row" onSubmit={event => {
         event.preventDefault()
         const action = new FormData(event.currentTarget).get('action')
         if (typeof action === 'string' && action) void save('USED', action)
       }}>
-        <label aria-label="수행 조치">수행 조치<select name="action" required defaultValue=""><option value="">선택</option>
-          {options.map(item => <option key={item.action_id} value={item.action_id}>
+        <label>이 티켓에서 수행한 조치<select name="action" required defaultValue=""><option value="">선택</option>
+          {options.items.map(item => <option key={item.action_id} value={item.action_id}>
             {item.event_sequence} · {item.result?.message ?? item.action_code}</option>)}
         </select></label>
         <button disabled={busy}>자료 활용 저장</button>
-      </form>)}
+      </form>}
   </div>
 }
 
@@ -371,7 +457,8 @@ function TrainingAnalysis({ base, path, session, readOnly }: { base: string; pat
     <p>권고는 참고 자료로 표시됩니다. 수행한 가상 조치는 별도로 기록됩니다.</p>
     {error && <p role="alert">{error}</p>}
     {!readOnly && <form onSubmit={analyze} className="row">
-      <label>분석 질문<textarea name="question" rows={2} maxLength={2000} required /></label>
+      <label>분석 질문<textarea name="question" rows={2} maxLength={2000} required
+        placeholder="예: 메모리 오류의 가능한 원인과 다음 점검 순서를 알려줘" /></label>
       <button disabled={pending || active}>분석 요청</button>
     </form>}
     {active && <p role="status">분석 중입니다.</p>}
@@ -404,6 +491,8 @@ function VirtualActions({ path, version, readOnly, session, onVersion }: {
       const saved = await api<Activity>(path + '/actions', {
         method: 'POST', headers: { 'Idempotency-Key': request.current.key }, body,
       }, session.csrf_token)
+      setState(previous => previous && !previous.activity.some(event => event.action_id === saved.action_id)
+        ? { ...previous, activity: [...previous.activity, saved] } : previous)
       request.current = null
       onVersion(saved.ticket_version)
       return true
@@ -418,19 +507,39 @@ function VirtualActions({ path, version, readOnly, session, onVersion }: {
     const form = event.currentTarget
     if (await perform('CUSTOM_NOTE', {}, String(new FormData(form).get('note')))) form.reset()
   }
+  const latestActions = new Map(state?.activity.filter(event => event.kind === 'ACTION')
+    .map(event => [event.action_code, event]))
   return <section id="actions" className="surface" tabIndex={-1}>
     <h2>가상 조치와 자유 메모</h2>
     {error && <p role="alert">{error}</p>}
     {!state && !error && <p role="status">조치 카탈로그를 불러오는 중입니다.</p>}
     {busy && <p role="status">실습 행동을 저장하고 있습니다.</p>}
     {state?.catalog.length === 0 && <p>이 시나리오 버전에는 가상 조치 카탈로그가 없습니다.</p>}
-    <ul className="training-grid training-actions">{state?.catalog.map(action => <li className="training-tile" key={action.action_code}>
-      <button type="button" className="secondary" disabled={readOnly || busy || !action.available}
-        onClick={() => void perform(action.action_code, action.parameters)}>{action.label}</button>
-      {action.blocked_reason && <small>{action.blocked_reason}</small>}
-    </li>)}</ul>
+    <ul className="training-grid training-actions">{state?.catalog.map(action => {
+      const completed = latestActions.get(action.action_code)
+      const disabled = readOnly || busy || (Boolean(completed) && !action.repeatable) || !action.available
+      return <li className="training-tile" key={action.action_code}>
+        {action.requires_note && !completed && !readOnly ? <form onSubmit={event => {
+          event.preventDefault()
+          const note = String(new FormData(event.currentTarget).get('observation') ?? '')
+          void perform(action.action_code, action.parameters, note)
+        }}>
+          <label>관측·인계 내용<textarea name="observation" required disabled={disabled} maxLength={4000} rows={2}
+            placeholder="예: 08:12에 응답이 회복됐지만 오류 재발 여부는 확인 중" /></label>
+          <button className="secondary" disabled={disabled}>{action.label}</button>
+        </form> : <button type="button" className="secondary" disabled={disabled}
+          onClick={() => void perform(action.action_code, action.parameters)}>{action.label}</button>}
+        {completed ? <div role="status">
+          <strong>{action.repeatable ? '최근 수행 결과' : '수행 완료'}</strong>
+          {completed.result && <><p>{completed.result.message}</p>
+            <small>장애 코드: {completed.result.error_code ?? '오류 없음'}</small></>}
+          {completed.note && <p className="knowledge-text">{completed.note}</p>}
+        </div> : action.blocked_reason && <small>{action.blocked_reason}</small>}
+      </li>
+    })}</ul>
     {!readOnly && <form onSubmit={note} className="row">
-      <label>자유 메모<textarea name="note" required maxLength={4000} rows={2} /></label>
+      <label>자유 메모<textarea name="note" required maxLength={4000} rows={2}
+        placeholder="예: BMC 진단에서 확인한 오류 코드를 티켓에 기록함" /></label>
       <button disabled={busy}>메모 저장</button>
     </form>}
     <h3>조치·메모 기록</h3>

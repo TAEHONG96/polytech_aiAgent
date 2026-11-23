@@ -1,0 +1,39 @@
+# 합성 데이터센터 운영 코퍼스
+
+코퍼스에는 승인 SOP 12개, 실습 티켓 템플릿 40개와 발행 시나리오 8개가 있다. 시나리오마다 이전 Bot, 현재 교육생, 다음 Bot의 연속 12시간 교대와 티켓 5건을 제공한다. 앞선 근무의 진행·대기 티켓 2건을 인수하고, 이미 해결된 사례 1건을 참고하며, 현재 교대에서 반복 장애와 정보 부족 사례를 확인한다.
+
+| 시나리오 키 | 실습 주제 |
+| --- | --- |
+| `synthetic-ops-boot` | POST 정지, 부팅 장치 미인식, 복구 항목 재발 |
+| `synthetic-ops-memory` | 메모리 ECC, 프로세스 메모리 압박, 슬롯 재발 |
+| `synthetic-ops-storage` | 대기열 지연, 이중 경로 축소, 복제 경보 |
+| `synthetic-ops-network` | 링크 플랩, CRC 증가, 구간별 패킷 손실 |
+| `synthetic-ops-power` | 전원 이중화 상실, 분기 확인, 센서 누락 |
+| `synthetic-ops-bmc` | BMC 타임아웃, 콘솔 고립, 관리망 손실 |
+| `synthetic-ops-major` | P1 지휘, 공통 시간선, 서비스별 복구 확인 |
+| `synthetic-ops-recovery` | 복구 후 간헐 오류, 관찰 창, 다음 교대 검증 |
+
+학습 자료는 [코퍼스 정의](../tests/corpus_data.py)에, 기대 원인·근거·다음 판단·처리 결과는 [검증 데이터](../tests/corpus_expectations.py)에 저장한다. 평가 데이터의 행은 시나리오 키와 `ticket-01`부터 `ticket-05`까지의 순서에 대응한다. 실행 이미지에는 검증 파일을 포함하지 않는다. 기존 실습 평가 엔진은 교육생이 수행한 조치와 인계를 평가하고, 코퍼스 기대 결과는 QA 검증용이다.
+
+발행된 1.0 회차에는 [코퍼스 가상 조치](../app/simulation/corpus_actions.py)가 적용된다. 조회·재측정은 반복할 수 있다. 네트워크·스토리지 경로 전환은 우회 경로 확인 후 한 번만 실행하며, 전환 뒤 재측정에서 가상 호스트 상태가 갱신된다. 공통 시간선과 잔여 위험 기록은 교육생이 작성한 내용을 조치 이력에 저장한다. 자료가 부족하면 전환을 보류하고 확인한 근거와 다음 조치를 인계할 수 있다.
+
+## 전용 Compose에서 적재 및 검증
+
+아래 명령은 운영과 분리된 `polytech-qa-synthetic-corpus` 프로젝트, `polytech_training_corpus` DB 및 전용 DB·SOP 볼륨을 사용한다. 브라우저가 필요하면 Ubuntu에서 `http://127.0.0.1:18087/login`으로 접속해 교육 계정을 만든다.
+
+```bash
+unset DOCKER_HOST DOCKER_CONTEXT COMPOSE_FILE COMPOSE_PROJECT_NAME COMPOSE_PROFILES COMPOSE_ENV_FILES
+export APP_PORT=18087 APP_ORIGIN=http://127.0.0.1:18087 AGENT_PROVIDER=fake GEMINI_API_KEY=
+corpus() {
+  docker --context default compose --env-file .env.example -p polytech-qa-synthetic-corpus \
+    -f compose.yaml -f compose.override.yaml -f compose.corpus.yaml "$@"
+}
+corpus up --build --wait --wait-timeout 240 nginx worker
+corpus build test
+corpus run --rm --no-deps -T test python -m tests.qa_seed_corpus
+corpus run --rm --no-deps -T test python -m tests.qa_seed_corpus --apply --verify
+```
+
+첫 스크립트 실행은 쓰기 없이 개수와 참조를 확인한다. `--apply`는 Fake provider, 루프백 HTTP 출처, 전용 DB와 격리 설정을 검사한 후 적재한다. 문서는 이름·해시·원본 바이트를 비교해 재사용하고, 발행 시나리오는 버전과 콘텐츠 지문을 비교한다. 충돌한 데이터를 발견하면 멈춘다. `--verify`는 전용 QA 교육 계정 하나에서 시나리오별 실행 8건을 생성하거나 재사용해 인수·티켓·SOP·발신 인계를 검사한다. Worker 색인 및 SOP 검색 API를 호출하고, AI 도구가 반환하는 실제 근거도 비교한다.
+
+실습 종료 후 `corpus stop`으로 전용 서비스만 정지한다. 같은 명령으로 다음에 기동하면 데이터를 다시 사용할 수 있다.

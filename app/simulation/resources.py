@@ -80,9 +80,20 @@ def training_search(body: TrainingSearchRequest, db: Database, run: OwnedRun, us
     return run_search(db, body, run_id=run.id, target_id=body.ticket_id)
 
 
+# References for the immutable, synthetic historical tickets seeded by revision 0007.
+HISTORICAL_TICKET_KEYS = {
+    UUID("d3000000-0000-4000-8000-000000000011"): "INC-HIST-000011",
+    UUID("d3000000-0000-4000-8000-000000000012"): "INC-HIST-000012",
+    UUID("d3000000-0000-4000-8000-000000000013"): "INC-HIST-000013",
+    UUID("d3000000-0000-4000-8000-000000000014"): "INC-HIST-000014",
+    UUID("d3000000-0000-4000-8000-000000000015"): "INC-HIST-000015",
+}
+
+
 def incident_view(incident: ScenarioIncident) -> dict:
     return {"id": incident.id, "occurred_at": incident.occurred_at, "title": incident.title,
             "incident_id": incident.id, "incident_key": incident.incident_key, "error_code": incident.error_code,
+            "ticket_key": HISTORICAL_TICKET_KEYS.get(incident.id),
             "source_type": "synthetic", "summary": incident.title, "resolution": incident.resolution}
 
 
@@ -106,7 +117,11 @@ def incident_source(ticket_id: UUID, incident_id: UUID, db: Database, run: Owned
     incident = db.scalar(select(ScenarioIncident).where(ScenarioIncident.id == incident_id, *incident_scope(ticket)))
     if incident is None:
         raise ApiError(404, "INCIDENT_NOT_FOUND", "승인된 사고 근거를 찾을 수 없습니다.")
-    return incident_view(incident)
+    host = db.get(ScenarioHost, incident.scenario_host_id)
+    asset_kind = host.initial_state.get("asset_kind") if host else None
+    return {**incident_view(incident), "asset_kind": asset_kind,
+            "service": {"memory": "compute", "storage": "storage"}.get(asset_kind),
+            "host": {"hostname": host.hostname, "host_key": host.host_key} if host else None}
 
 
 @router.post("/tickets/{ticket_id}/analyses", status_code=202)

@@ -51,7 +51,7 @@ function Warnings({ base, warnings, titles, completed = true }: {
   return warnings.length > 0 && <aside className="training-warning"><h3>{completed ? '확정 경고' : '확정 전 검토 · 업무상 누락'}</h3>
     {!completed && <p>보완할 수 있는 항목입니다. 이 경고가 있어도 보고서를 확정할 수 있습니다.</p>}
     <ul>{warnings.map((warning, index) => (
-    <li key={index}>{warning.ticket_id && <><a href={`${base}/tickets/${warning.ticket_id}`}>{titles[warning.ticket_id] ?? '관련 티켓'}</a> · </>}
+    <li key={index}>{warning.ticket_id && <><a href={`${base}/tickets/${warning.ticket_id}${warning.code === 'MISSING_IMPACT' ? '#ticket-summary' : ''}`}>{titles[warning.ticket_id] ?? '관련 티켓'}</a> · </>}
       {warningLabels[warning.code] ?? warning.code}</li>
   ))}</ul></aside>
 }
@@ -146,9 +146,10 @@ export function TrainingHandover({ base, session, completed }: { base: string; s
         <button type="button" className="secondary" disabled={busy || dirty} onClick={() => void save({ refresh_snapshot: true })}>인계 자료 다시 수집</button>
         {draft.revision === 0 && <p className="meta">자료를 수집하면 티켓과 후속 작업을 확인할 수 있습니다.</p>}
         <form key={`${draft.revision}-${refresh}`} onSubmit={saveNotes} onChange={() => setDirty(true)}>
-          <label>인계 요약<textarea name="summary" rows={3} maxLength={4000} defaultValue={draft.content.summary ?? ''} /></label>
+          <label>인계 요약<textarea name="summary" rows={3} maxLength={4000}
+            placeholder="예: 메모리 오류는 복구했고, 스토리지 응답 지연은 계속 확인 중입니다." defaultValue={draft.content.summary ?? ''} /></label>
           {draft.items.map(item => <label key={item.id}>{item.title} · 다음 조치
-            <textarea name={item.id} maxLength={4000} rows={2}
+            <textarea name={item.id} maxLength={4000} rows={2} placeholder="예: 응답 지연과 대기열 수치를 재확인하고 결과를 티켓에 기록"
               defaultValue={draft.content.open_items.find(note => note.ticket_id === item.id)?.next_action ?? ''} />
           </label>)}
           <button className="secondary" disabled={busy}>인계 초안 저장</button>

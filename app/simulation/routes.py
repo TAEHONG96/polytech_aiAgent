@@ -10,6 +10,8 @@ from sqlalchemy import select, text
 from app.auth import CurrentUser, WriteUser
 from app.db import Database
 from app.http import ApiError
+from app.knowledge.indexing import sync_ticket_index
+from app.knowledge.models import SopDocument
 from app.models import Ticket
 from app.simulation.access import OwnedRun, WritableRun
 from app.simulation.models import Scenario, ScenarioHost, ScenarioShiftSlot, ScenarioTicketTemplate, SimulationRun, SimulationRunHost
@@ -68,14 +70,27 @@ def clone_seed(db: Database, run: SimulationRun, scenario: Scenario) -> None:
         ScenarioTicketTemplate.scenario_id == scenario.id,
     ).order_by(ScenarioTicketTemplate.template_key))
     tickets = {}
+    observations = []
+    historical_keys = set()
     for template in templates:
+        fields = template.initial_ticket.copy()
+        fields.pop("incident_key", None)
+        fields.pop("sop_refs", None)
+        history = fields.pop("observed_history", [])
+        for field in ("resolved_at", "recheck_at"):
+            if fields.get(field) is not None:
+                fields[field] = datetime.fromisoformat(fields[field])
         ticket = Ticket(
-            **template.initial_ticket, id=uuid4(), detected_at=template.detected_at,
+            **fields, id=uuid4(), detected_at=template.detected_at,
             simulation_run_id=run.id, scenario_id=scenario.id, scenario_host_id=template.scenario_host_id,
             scenario_ticket_template_id=template.id, training_origin=template.origin, created_by=run.user_id,
             version=1, created_at=run.started_at, updated_at=run.started_at,
         )
         tickets[template.template_key] = ticket
+        if history:
+            historical_keys.add(template.template_key)
+            observations.append((template.detected_at, template.template_key, None))
+            observations.extend((datetime.fromisoformat(entry["at"]), template.template_key, entry) for entry in history)
     report = scenario.config["incoming_report"]
     links = [
         {"ticket_id": str(tickets[key].id),
@@ -96,8 +111,22 @@ def clone_seed(db: Database, run: SimulationRun, scenario: Scenario) -> None:
     db.flush()
     db.add_all(tickets.values())
     db.flush()
-    for ticket in tickets.values():
-        record_event(db, ticket, run.user_id, "scenario_seeded", {"origin": ticket.training_origin})
+    for key, ticket in tickets.items():
+        if key not in historical_keys:
+            record_event(db, ticket, run.user_id, "scenario_seeded", {"origin": ticket.training_origin})
+    for occurred_at, key, entry in sorted(observations, key=lambda observation: observation[0]):
+        ticket = tickets[key]
+        if entry is None:
+            event = record_event(db, ticket, run.user_id, "scenario_seeded", {"origin": ticket.training_origin})
+        else:
+            ticket.version += 1
+            event = record_event(db, ticket, run.user_id, "scenario_observation", {
+                "reason": entry["observation"], "crew": entry["crew"],
+            })
+        event.created_at = occurred_at
+    db.flush()
+    for key in sorted(historical_keys):
+        sync_ticket_index(db, tickets[key])
 
 
 @router.get("/simulation")
@@ -109,7 +138,8 @@ def summary(db: Database, user: CurrentUser) -> dict:
     return {
         "status": "ACTIVE" if run else "NOT_STARTED",
         "active_run_id": run.id if run else None,
-        "available_scenarios": [{"scenario_key": row.scenario_key, "version": row.version} for row in scenarios],
+        "available_scenarios": [{"scenario_key": row.scenario_key, "version": row.version, "title": row.title}
+                                for row in scenarios],
     }
 
 
@@ -189,7 +219,19 @@ def tickets(db: Database, run: OwnedRun, q: Annotated[str | None, Query(max_leng
 
 @router.get("/simulation-runs/{run_id}/tickets/{ticket_id}")
 def ticket_detail(ticket_id: UUID, db: Database, run: OwnedRun) -> dict:
-    return training_ticket(ticket_by_id(db, ticket_id, run_id=run.id))
+    ticket = ticket_by_id(db, ticket_id, run_id=run.id)
+    template = db.get(ScenarioTicketTemplate, ticket.scenario_ticket_template_id) if ticket.scenario_ticket_template_id else None
+    result = training_ticket(ticket)
+    if template is None or "sop_refs" not in template.initial_ticket:
+        return result
+    refs = [UUID(value) for value in template.initial_ticket["sop_refs"]]
+    docs = db.scalars(select(SopDocument).where(
+        SopDocument.id.in_(refs), SopDocument.training_approved.is_(True),
+    ).order_by(SopDocument.title)).all() if refs else ()
+    return {**result, "related_sops": [
+        {"id": doc.id, "title": doc.title, "source_url": f"/api/v1/simulation-runs/{run.id}/sops/{doc.id}"}
+        for doc in docs
+    ]}
 
 
 class TrainingTicketCreate(TicketCreate):

@@ -124,7 +124,7 @@ export function SopList({ session }: { session: Session }) {
         <h2>문서 업로드</h2>
         <ErrorNotice message={uploadError} />
         <form onSubmit={upload}>
-          <label>문서 제목<input name="title" maxLength={160} /></label>
+          <label>문서 제목<input name="title" maxLength={160} placeholder="예: 메모리 ECC 오류 진단 절차" /></label>
           <label>파일<input name="file" type="file" accept=".pdf,.txt,.md,.markdown" required /></label>
           <p className="meta">텍스트 PDF, UTF-8 TXT·Markdown · 요청당 최대 8 MiB</p>
           <button disabled={busy}>{busy ? '업로드 중' : '업로드'}</button>
@@ -242,7 +242,7 @@ export function KnowledgeSearch({ session }: { session: Session }) {
       <div className="row heading"><h1>장애 지식 검색</h1><a href="/knowledge">SOP 목록</a></div>
       <section className="surface">
         <form onSubmit={search}>
-          <label>장애 상황<textarea name="query" rows={3} maxLength={1000} required placeholder="서버 부팅 실패와 메인보드 오류" /></label>
+          <label>장애 상황<textarea name="query" rows={3} maxLength={1000} required placeholder="예: 서버 부팅 실패와 메인보드 오류" /></label>
           <fieldset className="knowledge-filters">
             <legend>검색 출처</legend>
             <label><input type="checkbox" name="source_type" value="SOP" defaultChecked /> SOP</label>

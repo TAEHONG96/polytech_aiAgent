@@ -1,4 +1,5 @@
 from app.simulation.evaluation_input import RESOLVED
+from app.simulation.corpus_actions import DECISIONS, DIAGNOSTICS, INTERVENTIONS
 
 RULES = {
     "UNDERSTAND_INCIDENT": ("장애 이해", "가상 상태나 BMC 진단으로 증상과 오류를 먼저 확인하세요."),
@@ -13,7 +14,7 @@ RULES = {
 }
 
 
-def grade(ticket: dict, report_id: str) -> dict:
+def grade(ticket: dict, report_id: str, *, flexible: bool = False) -> dict:
     timeline = ticket["events"]
     performed = [event for event in timeline if event["type"] == "virtual_action_performed"]
     by_id = {event["id"]: event for event in performed}
@@ -33,7 +34,10 @@ def grade(ticket: dict, report_id: str) -> dict:
     def code(event):
         return event["details"].get("action_code")
 
-    diagnosed = [event for event in performed if code(event) in {"CHECK_SERVER_STATUS", "RUN_BMC_DIAGNOSTICS"}]
+    diagnostic_codes = {"CHECK_SERVER_STATUS", "RUN_BMC_DIAGNOSTICS"}
+    if flexible:
+        diagnostic_codes |= DIAGNOSTICS | {"CHECK_MEMORY", "CHECK_STORAGE"}
+    diagnosed = [event for event in performed if code(event) in diagnostic_codes]
     emit("UNDERSTAND_INCIDENT", "PASS" if diagnosed else "NOT_OBSERVED", event_refs(diagnosed))
 
     for kind, check, use, source_kind in (
@@ -56,10 +60,19 @@ def grade(ticket: dict, report_id: str) -> dict:
 
     asset = ticket["asset_kind"]
     action_code = {"memory": "REPLACE_MEMORY", "storage": "CHECK_STORAGE"}.get(asset)
-    interventions = [event for event in performed if code(event) == action_code] if action_code else []
-    emit("APPROPRIATE_VIRTUAL_ACTION", "NOT_APPLICABLE" if not action_code else "PASS" if interventions
-         else "NOT_MET" if performed else "NOT_OBSERVED", event_refs(interventions or performed))
-    after = [event for event in performed if code(event) == "RERUN_DIAGNOSTICS" and interventions
+    interventions = [event for event in performed if code(event) in INTERVENTIONS] if flexible else [
+        event for event in performed if code(event) == action_code
+    ]
+    supported_decisions = [event for event in performed if code(event) in DECISIONS
+                           and any(check["sequence"] < event["sequence"] for check in diagnosed)] if flexible else []
+    if flexible and not interventions and not supported_decisions and ticket["status"] not in RESOLVED:
+        supported_decisions = diagnosed if ticket["included"] and ticket["handover_next_action"] else []
+    justified = interventions or supported_decisions
+    applies = flexible or bool(action_code)
+    emit("APPROPRIATE_VIRTUAL_ACTION", "NOT_APPLICABLE" if not applies else "PASS" if justified
+         else "NOT_MET" if performed else "NOT_OBSERVED", event_refs(justified or performed))
+    validation_codes = {"RERUN_DIAGNOSTICS", "MEASURE_STORAGE_LATENCY", "MEASURE_PACKET_LOSS"} if flexible else {"RERUN_DIAGNOSTICS"}
+    after = [event for event in performed if code(event) in validation_codes and interventions
              and event["sequence"] > interventions[-1]["sequence"]]
     emit("POST_REPAIR_VALIDATION", "NOT_APPLICABLE" if not interventions else "PASS" if after else "NOT_MET",
          event_refs(interventions + after))
@@ -68,7 +81,7 @@ def grade(ticket: dict, report_id: str) -> dict:
     proof = event_refs(after or performed) + [ref("work", task["id"]) for task in tasks]
     if ticket["handover_next_action"]:
         proof.append(ref("handover", report_id))
-    emit("DOCUMENT_ACCURACY", "PASS" if after and recorded else "NOT_MET" if proof else "NOT_OBSERVED", proof)
+    emit("DOCUMENT_ACCURACY", "PASS" if (after or supported_decisions) and recorded else "NOT_MET" if proof else "NOT_OBSERVED", proof)
     pending = [task for task in ticket["work"] if task["status"] != "done"]
     handoff_required = ticket["status"] not in RESOLVED or bool(pending)
     handoff_passed = ticket["included"] and bool(ticket["handover_next_action"])
