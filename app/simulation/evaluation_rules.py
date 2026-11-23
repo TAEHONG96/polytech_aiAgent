@@ -71,9 +71,13 @@ def grade(ticket: dict, report_id: str, *, flexible: bool = False) -> dict:
     applies = flexible or bool(action_code)
     emit("APPROPRIATE_VIRTUAL_ACTION", "NOT_APPLICABLE" if not applies else "PASS" if justified
          else "NOT_MET" if performed else "NOT_OBSERVED", event_refs(justified or performed))
-    validation_codes = {"RERUN_DIAGNOSTICS", "MEASURE_STORAGE_LATENCY", "MEASURE_PACKET_LOSS"} if flexible else {"RERUN_DIAGNOSTICS"}
-    after = [event for event in performed if code(event) in validation_codes and interventions
-             and event["sequence"] > interventions[-1]["sequence"]]
+    after = []
+    if interventions:
+        last = interventions[-1]
+        validation_code = "RERUN_DIAGNOSTICS"
+        if code(last) == "SWITCH_REDUNDANT_PATH":
+            validation_code = "MEASURE_PACKET_LOSS" if asset == "network" else "MEASURE_STORAGE_LATENCY"
+        after = [event for event in performed if code(event) == validation_code and event["sequence"] > last["sequence"]]
     emit("POST_REPAIR_VALIDATION", "NOT_APPLICABLE" if not interventions else "PASS" if after else "NOT_MET",
          event_refs(interventions + after))
     tasks = [task for task in ticket["work"] if task["note"] or task["status"] == "done"]

@@ -127,7 +127,7 @@ Phase 1 시작 요청의 `Idempotency-Key`는 필수이며 공백 없이 1~128�
 
 - 201 생성, 비밀번호/중복/요청 제한 및 Origin 정책 적용.
 - 위 값은 문법 예시다. 로그인 식별자는 기존 `username`을 사용한다. 가입 비밀번호는 8~128자다.
-- 등록 후 기존 로그인 화면으로 진행한다. 공개 Compose 구성에서는 가입을 비활성화한다.
+- 등록 후 기존 로그인 화면으로 진행한다. 일반 공개 Compose 구성에서는 가입을 비활성화한다. 공개 HTTPS 교육 코퍼스에서는 전용 DB, 시뮬레이션 모드, 공개 가입 플래그와 교육용 프록시를 설정해 가입을 열 수 있다. [공개 교육 코퍼스 구성](synthetic-operations-corpus.md#cloudflare-tunnel에서-공개-실습-가입)
 - `GET /api/v1/auth/registration`은 `{"enabled":false}` 또는 `{"enabled":true}`를 반환한다. 가입 안내 확인은 가입 쓰기 요청의 제한 버킷을 사용하지 않는다. 가입 POST의 Origin과 요청 제한은 유지한다.
 
 ### 4.2 현재 실습 요약

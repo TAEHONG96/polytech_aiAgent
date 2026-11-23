@@ -21,6 +21,9 @@ services:
       <<: *corpus-env
       AGENT_PROVIDER: fake
       GEMINI_API_KEY: ""
+  nginx:
+    build:
+      target: ${CORPUS_NGINX_TARGET:-local}
   test:
     environment:
       <<: *corpus-env

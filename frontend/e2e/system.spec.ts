@@ -229,7 +229,10 @@ test('인계 준비 검증, 보고서 확정과 다음 교대 인수', async ({ 
   const ready = page.getByRole('button', { name: '인계 준비 완료' })
   await perform(page, reportPath, 'PUT', 422, () => ready.click())
   await expect(page.getByRole('alert')).toContainText('모든 누락 항목의 답변')
-  for (const answer of await page.getByPlaceholder('답변 또는 미확인 사유').all()) {
+  const gapAnswers = page.getByRole('heading', { name: '추가 확인 요청', level: 4, exact: true })
+    .locator('..').getByRole('textbox')
+  await expect(gapAnswers.first()).toBeVisible()
+  for (const answer of await gapAnswers.all()) {
     await answer.fill('합성 자료 재확인 예정')
   }
   await perform(page, reportPath, 'PUT', 200, () => ready.click())

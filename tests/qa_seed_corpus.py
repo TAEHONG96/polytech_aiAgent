@@ -13,25 +13,26 @@ from uuid import NAMESPACE_URL, UUID, uuid5
 from zoneinfo import ZoneInfo
 
 from fastapi.testclient import TestClient
-from sqlalchemy import create_engine, func, select, text
+from sqlalchemy import create_engine, func, or_, select, text
 from sqlalchemy.orm import Session
 
 from app.agent.tools import Toolbox
 from app.db import engine
 from app.knowledge.documents import original_path, register_sop
-from app.knowledge.embedding import embedding_profile
+from app.knowledge.embedding import FakeEmbedder, embedding_profile
 from app.knowledge.models import IndexJob, IndexStatus, KnowledgeChunk, SopDocument
 from app.models import User
 from app.settings import settings
-from app.simulation.models import Scenario, ScenarioHost, ScenarioShiftSlot, ScenarioTicketTemplate
+from app.simulation.models import Scenario, ScenarioHost, ScenarioIncident, ScenarioShiftSlot, ScenarioTicketTemplate
 from app.tickets import Severity, TicketStatus
-from tests.corpus_data import SCENARIOS, SOPS
+from tests.corpus_data import HOST_HISTORY, SCENARIOS, SOPS
 from tests.corpus_expectations import EXPECTATIONS
 
 PROJECT = "polytech-qa-synthetic-corpus"
 DATABASE = "polytech_training_corpus"
 PREFIX = "synthetic-ops-"
 VERSION = "1.0"
+RECURRENCE_TEMPLATE = "ticket-04"
 KST = ZoneInfo("Asia/Seoul")
 RESOLVED = {"resolved", "closed"}
 HOURS = timedelta(hours=12)
@@ -90,6 +91,8 @@ def validate_data():
     require(len(SOPS) == 12 and len(SCENARIOS) == 8 and sum(len(row[-1]) for row in SCENARIOS.values()) == 40,
             "Expected 12 SOPs, 8 scenarios and 40 tickets.")
     require(SCENARIOS.keys() == EXPECTATIONS.keys(), "Assessment scenario keys differ.")
+    require(SCENARIOS.keys() == HOST_HISTORY.keys() and all(all(entry) for entry in HOST_HISTORY.values()),
+            "Every scenario requires an earlier host incident.")
     used_sops = set()
     dispositions = set()
     titles = set()
@@ -234,6 +237,29 @@ def build_scenarios(db, documents):
         db.flush()
 
 
+def ensure_host_history(db):
+    embedder = FakeEmbedder()
+    for key, (title, resolution) in HOST_HISTORY.items():
+        template = db.get(ScenarioTicketTemplate, identifier(f"{key}/{RECURRENCE_TEMPLATE}"))
+        host = db.get(ScenarioHost, template.scenario_host_id)
+        fields = {
+            "id": identifier(f"{key}/host-history"), "incident_key": f"{PREFIX}{key}-previous",
+            "scenario_id": template.scenario_id, "scenario_host_id": host.id,
+            "occurred_at": template.detected_at - timedelta(days=1), "title": title,
+            "error_code": host.initial_state["error_code"], "resolution": resolution,
+        }
+        matches = db.scalars(select(ScenarioIncident).where(or_(
+            ScenarioIncident.id == fields["id"],
+            (ScenarioIncident.scenario_id == template.scenario_id) & (ScenarioIncident.incident_key == fields["incident_key"]),
+        ))).all()
+        if matches:
+            require(len(matches) == 1 and all(getattr(matches[0], field) == value for field, value in fields.items()),
+                    f"Published host incident collision: {key}")
+        else:
+            vector, = embedder.documents(title, [resolution])
+            db.add(ScenarioIncident(**fields, approved=True, embedding=vector, embedding_profile=embedder.profile.fingerprint))
+
+
 def seed(owner, username):
     with owner.connect() as guard:
         guard.execute(text("SELECT pg_advisory_lock(hashtext(:project))"), {"project": PROJECT})
@@ -244,6 +270,7 @@ def seed(owner, username):
                 require(actor_id is not None, "Active QA operator not found.")
                 documents = ensure_sops(db, actor_id)
                 build_scenarios(db, documents)
+                ensure_host_history(db)
                 db.commit()
                 return documents
         finally:
@@ -301,6 +328,7 @@ def verify(owner, documents):
                 "Incorrect education title prefix.")
         searched = set()
         observed = 0
+        host_incidents = 0
         agent_context_checks = 0
         rubric_text = {value for rows in EXPECTATIONS.values() for row in rows for value in row[:3] if len(value) >= 24}
         for key, row in SCENARIOS.items():
@@ -319,6 +347,22 @@ def verify(owner, documents):
             incoming = client.get(base + "/incoming-handover").json()["tickets"]
             require([link["ticket_id"] for link in incoming] == [by_title[case[3]]["id"] for case in row[-1][:2]],
                     f"{key}: incoming report is not ordered.")
+            recurrence = by_title[row[-1][3][3]]
+            history_response = client.get(f'{base}/tickets/{recurrence["id"]}/host-incidents')
+            history_id = str(identifier(f"{key}/host-history"))
+            require(history_response.status_code == 200, f"{key}: host history lookup failed.")
+            incident = next((item for item in history_response.json()["incidents"] if item["incident_id"] == history_id), None)
+            require(incident is not None and datetime.fromisoformat(incident["occurred_at"]) <
+                    datetime.fromisoformat(recurrence["detected_at"]), f"{key}: approved earlier host incident missing.")
+            source = client.get(incident["source_url"])
+            require(source.status_code == 200 and source.json()["host"]["host_key"] == history_response.json()["host"]["host_key"],
+                    f"{key}: historical source host mismatch.")
+            search = client.post(base + "/knowledge/search", headers=auth, json={
+                "query": incident["title"], "source_types": ["INCIDENT"], "ticket_id": recurrence["id"], "limit": 5,
+            })
+            require(search.status_code == 200 and history_id in {hit["source_id"] for hit in search.json()["results"]},
+                    f"{key}: earlier host incident missing from search.")
+            host_incidents += 1
             for case in row[-1]:
                 status, severity, sop_key, title, _, diagnostic, performed, next_action = case
                 ticket = by_title[title]
@@ -374,7 +418,7 @@ def verify(owner, documents):
         client.post("/api/v1/auth/logout", headers=auth)
     return {"sops": 12, "ticket_templates": 40, "scenarios": 8, "sop_chunks": chunks, "sop_recall_at_5": len(searched),
             "verified_runs": 8, "observed_history_events": observed, "offline_expectations": 40,
-            "agent_context_checks": agent_context_checks}
+            "host_incidents": host_incidents, "agent_context_checks": agent_context_checks}
 
 
 def main():
@@ -387,12 +431,14 @@ def main():
     if not args.apply:
         if args.verify:
             parser.error("--verify requires --apply and creates isolated QA verification runs")
-        print(json.dumps({"sops": 12, "ticket_templates": 40, "scenarios": 8, "offline_expectations": 40}))
+        print(json.dumps({"sops": 12, "ticket_templates": 40, "scenarios": 8, "host_incidents": 8, "offline_expectations": 40}))
         return
     owner = guarded_engine()
     try:
         documents = seed(owner, args.username)
-        result = verify(owner, documents) if args.verify else {"sops": len(documents), "ticket_templates": 40, "scenarios": 8}
+        result = verify(owner, documents) if args.verify else {
+            "sops": len(documents), "ticket_templates": 40, "scenarios": 8, "host_incidents": 8,
+        }
         print(json.dumps(result))
     finally:
         owner.dispose()
