@@ -385,23 +385,52 @@ function App() {
   }
 
   const trainee = session?.roles.includes('trainee')
+  const trainingRun = /^\/simulation-runs\/[\da-f-]{36}(?=\/|$)/i.exec(path)?.[0]
+  if (session && trainee) return <div className="training-layout">
+    <a className="skip-link" href="#main-content">본문으로 이동</a>
+    <aside className="training-sidebar">
+      <div className="training-brand"><span aria-hidden="true">D</span><div>DCO Ticket Assistant<small>장애 대응 실습</small></div></div>
+      <nav aria-label="교육 메뉴">
+        <a href="/simulation" aria-current={path === '/simulation' || path === '/' ? 'page' : undefined}>내 실습</a>
+        {trainingRun && <>
+          <a href={trainingRun} aria-current={path === trainingRun ? 'page' : undefined}>근무 워크스페이스</a>
+          <a href={trainingRun + '/sops'} aria-current={path.startsWith(trainingRun + '/sops') ? 'page' : undefined}>승인 SOP 자료</a>
+        </>}
+        <a href="/about" aria-current={path === '/about' ? 'page' : undefined}>서비스 소개</a>
+      </nav>
+      <div className="training-account"><strong>{session.user.display_name}</strong><small>교육생</small>
+        <button className="secondary" onClick={logout}>로그아웃</button></div>
+    </aside>
+    <div className="training-body">
+      <header className="training-topbar"><strong>교육 시뮬레이션</strong><span>가상 운영 환경</span></header>
+      <main className="training-shell" id="main-content" tabIndex={-1}>
+        <ErrorNotice message={error} />
+        {path === '/about' ? <section className="surface">
+          <h1>장애 대응 실습 소개</h1>
+          <p>가상 데이터센터에서 이전 교대의 인계를 읽고, 티켓과 승인 SOP를 조사하고, 조치 결과를 다음 근무조에 전달합니다.</p>
+          <p>인계 확정 후 실습 평가에서 행동 기록과 판정 근거를 확인할 수 있습니다.</p>
+          <a className="button" href="/simulation">내 실습 열기</a>
+        </section> : <TrainingPage key={path} path={path} session={session} />}
+      </main>
+    </div>
+  </div>
+
   return (
     <>
       <a className="skip-link" href="#main-content">본문으로 이동</a>
-      <header className={trainee ? 'training-header' : undefined}><nav className="shell row">
+      <header><nav className="shell row">
         <div className="row">
-          <a className="brand" href={trainee ? '/simulation' : '/tickets'}>{trainee ? '장애 대응 실습' : 'IT 운영 지원'}</a>
+          <a className="brand" href="/tickets">IT 운영 지원</a>
           <a href="/about" aria-current={path === '/about' ? 'page' : undefined}>소개</a>
-          {session && !trainee && <><a href="/tickets">장애 티켓</a><a href="/knowledge">SOP 문서</a><a href="/knowledge/search">지식 검색</a><a href="/agent">AI 장애 분석</a><a href="/handovers" aria-current={path.startsWith('/handovers') ? 'page' : undefined}>교대 인수인계</a></>}
+          {session && <><a href="/tickets">장애 티켓</a><a href="/knowledge">SOP 문서</a><a href="/knowledge/search">지식 검색</a><a href="/agent">AI 장애 분석</a><a href="/handovers" aria-current={path.startsWith('/handovers') ? 'page' : undefined}>교대 인수인계</a></>}
         </div>
         {session && <div className="row account"><span>{session.user.display_name}</span><button className="secondary" onClick={logout}>로그아웃</button></div>}
       </nav></header>
-      <main className={trainee ? 'shell training-shell' : 'shell'} id="main-content" tabIndex={-1}>
+      <main className="shell" id="main-content" tabIndex={-1}>
         <ErrorNotice message={error} />
         {path === '/about' ? <About signedIn={Boolean(session)} />
           : session === undefined ? <p role="status">세션을 확인하는 중입니다.</p>
           : !session ? <Login key={path} onLogin={startSession} path={path} />
-          : trainee ? <TrainingPage key={path} path={path} session={session} />
           : path === '/agent' ? <AgentPage session={session} />
           : path === '/handovers' ? <HandoverDashboard session={session} />
           : handover ? <HandoverDetail id={handover[1]} session={session} />

@@ -143,9 +143,18 @@ export function TrainingHandover({ base, session, completed }: { base: string; s
         <a href={`${base}/outgoing-handover/revisions/${draft.revision}`}>확정 리비전 열기</a>
       </> : <>
         <p>미해결 티켓이 있어도 확정할 수 있습니다. 확정하면 실습이 종료되고 티켓, 작업, 인계 원본은 읽기 전용이 됩니다.</p>
+        <div className="training-handover-step">
+        <h3>인계 대상과 원본 기록</h3>
         <button type="button" className="secondary" disabled={busy || dirty} onClick={() => void save({ refresh_snapshot: true })}>인계 자료 다시 수집</button>
         {draft.revision === 0 && <p className="meta">자료를 수집하면 티켓과 후속 작업을 확인할 수 있습니다.</p>}
+        {!!draft.items.length && <ul className="training-list">{draft.items.map(item => <li key={item.id}>
+          <div><a href={base + '/tickets/' + item.id}>{item.title}</a>
+            {item.next_action && <p>기록된 다음 조치 · {item.next_action}</p>}</div>
+          <span className="training-badge" data-state={item.status}>{statuses[item.status]}</span>
+        </li>)}</ul>}
+        </div>
         <form key={`${draft.revision}-${refresh}`} onSubmit={saveNotes} onChange={() => setDirty(true)}>
+          <h3>다음 근무조 전달 내용</h3>
           <label>인계 요약<textarea name="summary" rows={3} maxLength={4000}
             placeholder="예: 메모리 오류는 복구했고, 스토리지 응답 지연은 계속 확인 중입니다." defaultValue={draft.content.summary ?? ''} /></label>
           {draft.items.map(item => <label key={item.id}>{item.title} · 다음 조치

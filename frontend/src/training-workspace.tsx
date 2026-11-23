@@ -7,6 +7,7 @@ import type { Session, Status, Ticket } from './api'
 import { TicketOperations } from './ticket-operations'
 import { TrainingEvaluation, TrainingHandover } from './training-evaluation'
 import { trainingSourceHref } from './training-source'
+import { Badge, Feedback, Priority, TicketStatus } from './ui'
 
 const kst = new Intl.DateTimeFormat('ko-KR', {
   timeZone: 'Asia/Seoul', dateStyle: 'short', timeStyle: 'short',
@@ -27,8 +28,7 @@ type Run = { status: 'ACTIVE' | 'COMPLETED'; virtual_now: string; scenario: { ke
 type Slot = { id: string; crew_code: string; type: string; actor_type: string; starts_at: string; ends_at: string }
 type Incoming = { summary: string; tickets: { ticket_id: string }[] }
 type Incident = { id: string; ticket_key: string | null; summary: string; occurred_at: string; resolution: string; source_url: string }
-type Sop = { id: string; title: string; original_url: string }
-type Hit = { source_id: string; title: string; content: string; source_url: string; section: string | null; page_number: number | null }
+type Hit = { source_type: 'SOP' | 'TICKET' | 'INCIDENT'; source_id: string; title: string; content: string; source_url: string; section: string | null; page_number: number | null }
 type CatalogAction = {
   action_code: string; label: string; parameters: Record<string, string>; available: boolean
   blocked_reason: string | null; repeatable?: boolean; requires_note?: boolean
@@ -55,6 +55,8 @@ function useSectionFocus(ready: boolean) {
     if (!ready) return
     const target = document.getElementById(window.location.hash.slice(1))
     if (target) {
+      const disclosure = target.closest('details')
+      if (disclosure) disclosure.open = true
       target.focus({ preventScroll: true })
       target.scrollIntoView({ block: 'start' })
     }
@@ -65,7 +67,7 @@ export function TrainingWorkspace({ runId, ticketId, session }: { runId: string;
   const base = '/simulation-runs/' + runId
   const { data: run, error } = useResource<Run>(base)
   return <>
-    <nav className="training-nav" aria-label="실습 탐색"><a href="/simulation">내 실습</a>
+    <nav className="training-nav training-breadcrumbs" aria-label="실습 탐색">
       {run && <a href={base + '/sops'}>SOP 목록</a>}{ticketId && <>
       <a href={base}>근무·티켓 목록</a><a href={base + '#outgoing'}>발신 인계</a>
       {run?.status === 'COMPLETED' && <a href={base + '#evaluation'}>평가 결과</a>}
@@ -81,8 +83,11 @@ function Overview({ base, run, session }: { base: string; run: Run; session: Ses
   const schedule = useResource<{ slots: Slot[] }>(base + '/schedule')
   const incoming = useResource<Incoming>(base + '/incoming-handover')
   const [status, setStatus] = useState('')
+  const [query, setQuery] = useState('')
   const tickets = useResource<{ items: TrainingTicket[]; next_cursor: string | null }>(base + '/tickets?limit=100')
-  const matching = tickets.data?.items.filter(ticket => !status || status === ticket.status)
+  const search = query.trim().toLocaleLowerCase()
+  const matching = tickets.data?.items.filter(ticket => (!status || status === ticket.status) &&
+    (!search || [ticket.number, ticket.title, ticket.service].some(value => value.toLocaleLowerCase().includes(search))))
   const current = schedule.data?.slots[1]
   const completed = run.status === 'COMPLETED'
   useSectionFocus(true)
@@ -95,6 +100,28 @@ function Overview({ base, run, session }: { base: string; run: Run; session: Ses
     <nav className="training-nav training-nav-sections" aria-label="실습 자료"><a href="#schedule">근무·인계</a><a href="#tickets">티켓</a>
       <a href="#knowledge">SOP·유사 장애</a><a href="#activity">행동 타임라인</a><a href="#outgoing">발신 인계</a>
       {completed && <a href="#evaluation">평가 결과</a>}</nav>
+    <div className="training-workgrid">
+    <section id="tickets" className="surface" tabIndex={-1}>
+      <div className="training-heading"><h2>실습 티켓</h2></div>
+      <div className="training-filters">
+        <label>티켓 검색<input type="search" value={query} onChange={event => setQuery(event.target.value)} placeholder="티켓 번호, 제목, 영향 서비스" /></label>
+        <label>티켓 상태 필터<select value={status} onChange={event => setStatus(event.target.value)}>
+          <option value="">전체</option>{Object.entries(statuses).map(([value, label]) => <option key={value} value={value}>{label}</option>)}
+        </select></label>
+      </div>
+      {tickets.error && <p className="notice" role="alert">{tickets.error}</p>}
+      {!tickets.data && !tickets.error && <Feedback>티켓 목록을 불러오는 중입니다.</Feedback>}
+      {matching?.length === 0 && <Feedback kind="empty">조건에 맞는 실습 티켓이 없습니다.</Feedback>}
+      {!!matching?.length && <div className="table-scroll training-table" role="region" aria-label="실습 티켓 목록" tabIndex={0}>
+        <table><thead><tr><th scope="col">티켓</th><th scope="col">우선순위</th><th scope="col">상태</th></tr></thead>
+          <tbody>{matching.map(ticket => <tr key={ticket.id}>
+            <td><a href={base + '/tickets/' + ticket.id}>{ticket.title}</a>
+              <div className="meta"><code>{ticket.number}</code> · {ticket.service} · {origin[ticket.training_origin]}</div></td>
+            <td><Priority value={ticket.severity} /></td><td><TicketStatus ticket={ticket} /></td>
+          </tr>)}</tbody>
+        </table>
+      </div>}
+    </section>
     <section id="schedule" className="surface" tabIndex={-1}>
       <h2>4조 2교대 근무</h2>
       {schedule.error && <p className="notice" role="alert">{schedule.error}</p>}
@@ -115,19 +142,7 @@ function Overview({ base, run, session }: { base: string; run: Run; session: Ses
           {tickets.data?.items.find(ticket => ticket.id === link.ticket_id)?.title ?? '이월 티켓 열기'}</a></li>
       ))}</ul>
     </section>
-    <section id="tickets" className="surface" tabIndex={-1}>
-      <div className="training-heading"><h2>실습 티켓</h2><label>티켓 상태 필터<select value={status} onChange={event => setStatus(event.target.value)}>
-        <option value="">전체</option>{Object.entries(statuses).map(([value, label]) => <option key={value} value={value}>{label}</option>)}
-      </select></label></div>
-      {tickets.error && <p className="notice" role="alert">{tickets.error}</p>}
-      {!tickets.data && !tickets.error && <p role="status">티켓 목록을 불러오는 중입니다.</p>}
-      {matching?.length === 0 && <p>표시할 티켓이 없습니다.</p>}
-      <ul className="training-list">{matching?.map(ticket => (
-        <li key={ticket.id}><div><a href={base + '/tickets/' + ticket.id}>{ticket.title}</a>
-          <p className="meta">{ticket.number} · {ticket.severity} · {origin[ticket.training_origin]}</p></div>
-          <span className="training-badge" data-state={ticket.status}>{statuses[ticket.status]}</span></li>
-      ))}</ul>
-    </section>
+    </div>
     <Knowledge base={base} session={session} />
     <RunTimeline base={base} titles={Object.fromEntries(tickets.data?.items.map(ticket => [ticket.id, ticket.title]) ?? [])} />
     <TrainingHandover base={base} session={session} completed={completed} />
@@ -151,40 +166,43 @@ function TicketWorkspace({ base, ticketId, run, session }: { base: string; ticke
   const errorCode = host?.state.error_code
   const readOnly = run.status === 'COMPLETED' || !!current.archived_at
   return <>
-    <div className="training-hero"><div><p className="training-context">{current.number} · {current.severity} · {origin[current.training_origin]}</p>
+    <div className="training-hero"><div><p className="training-context"><code>{current.number}</code> · {origin[current.training_origin]}</p>
       <h1>{current.title}</h1><p>발생 {date(current.detected_at)} KST{incidents.data?.host && ` · ${incidents.data.host.hostname}`}</p></div>
-      <span className="training-badge" data-state={current.status}>{statuses[current.status]}{readOnly && ' · 읽기 전용'}</span></div>
+      <div className="row"><Priority value={current.severity} /><TicketStatus ticket={current} />
+        {readOnly && <Badge>읽기 전용</Badge>}</div></div>
     <nav className="training-nav training-nav-sections" aria-label="티켓 실습 도구">
       <a href="#ticket-summary">장애 개요</a>
       <a href="#incidents">동일 호스트 이력</a><a href="#knowledge">SOP·유사 장애</a>
       <a href="#analysis">AI 분석</a><a href="#actions">가상 조치</a><a href="#work">작업 이력</a>
     </nav>
-    <section id="ticket-summary" className="surface" tabIndex={-1}>
+    <div className="training-workgrid"><section id="ticket-summary" className="surface" tabIndex={-1}>
       <h2>장애 개요</h2><p className="knowledge-text">{current.description}</p>
+      {readOnly ? <p>영향 범위: {current.impact ?? '기록 없음'}</p>
+        : <TrainingImpact key={current.id} path={path} ticket={current} session={session} onVersion={setVersion} />}
+      {current.resolution && <p>해결 기록 {current.resolution}</p>}
+      {!readOnly && <TrainingTransition path={path} ticket={current} session={session} onVersion={setVersion} />}
+    </section><aside className="surface" aria-label="티켓 참고 정보">
+      <h2>대상 시스템</h2>
       <dl className="details">
         <div><dt>티켓 키</dt><dd><code>{current.number}</code></dd></div>
         <div><dt>티켓 ID</dt><dd><code>{current.id}</code></dd></div>
         <div><dt>서비스</dt><dd>{current.service}</dd></div>
         {host && <>
-          <div><dt>호스트명</dt><dd>{host.hostname}</dd></div>
-          <div><dt>호스트 키</dt><dd>{host.host_key}</dd></div>
+          <div><dt>호스트명</dt><dd><code>{host.hostname}</code></dd></div>
+          <div><dt>호스트 키</dt><dd><code>{host.host_key}</code></dd></div>
           <div><dt>장애 분류</dt><dd>{asset ? (assetLabels[asset] ?? asset) : '미등록'}</dd></div>
-          <div><dt>현재 장애 코드</dt><dd>{errorCode === null ? '오류 없음' : (errorCode ?? '미등록')}</dd></div>
+          <div><dt>현재 장애 코드</dt><dd>{errorCode ? <code>{errorCode}</code> : errorCode === null ? '오류 없음' : '미등록'}</dd></div>
           <div><dt>현재 호스트 상태</dt><dd>{health ? (healthLabels[health] ?? health) : '미등록'}</dd></div>
         </>}
       </dl>
       {hosts.error ? <p role="alert">호스트 정보 조회 실패. {hosts.error}</p>
         : !hosts.data ? <p role="status">호스트 정보를 불러오는 중입니다.</p>
           : !host && <p>연결된 가상 호스트가 없습니다.</p>}
-      {readOnly ? <p>영향 범위: {current.impact ?? '기록 없음'}</p>
-        : <TrainingImpact key={current.id} path={path} ticket={current} session={session} onVersion={setVersion} />}
-      {current.resolution && <p>해결 기록 {current.resolution}</p>}
       {!!current.related_sops?.length && <div>
         <h3>관련 SOP</h3>
         <ul>{current.related_sops.map(sop => <li key={sop.id}><a href={trainingSourceHref(sop.source_url)}>{sop.title}</a></li>)}</ul>
       </div>}
-      {!readOnly && <TrainingTransition path={path} ticket={current} session={session} onVersion={setVersion} />}
-    </section>
+    </aside></div>
     <section id="incidents" className="surface" tabIndex={-1}>
       <h2>동일 호스트의 과거 장애</h2>
       <p className="meta">현재 티켓 발생 전에 같은 호스트에서 발생한 승인 사례입니다.</p>
@@ -197,7 +215,7 @@ function TicketWorkspace({ base, ticketId, run, session }: { base: string; ticke
         {!readOnly && <LearningControl path={path} kind="HOST_HISTORY" sourceId={item.id} session={session} />}
       </li>)}</ul>
     </section>
-    <Knowledge base={base} session={session} ticketId={ticketId} readOnly={readOnly} />
+    <Knowledge base={base} session={session} ticketId={ticketId} readOnly={readOnly} initialQuery={current.description} />
     <TrainingAnalysis base={base} path={path} session={session} readOnly={readOnly} />
     <VirtualActions path={path} version={current.version} session={session} readOnly={readOnly} onVersion={setVersion} />
     <div id="work" tabIndex={-1}><TicketOperations ticket={current} session={session} trainingPath={base} readOnly={readOnly} onVersion={setVersion} /></div>
@@ -289,8 +307,9 @@ const eventNames: Record<string, string> = { scenario_seeded: '시나리오 티�
 function RunTimeline({ base, titles }: { base: string; titles: Record<string, string> }) {
   const [cursor, setCursor] = useState(0)
   const timeline = useResource<{ items: RunEvent[]; next_after_sequence: number | null }>(`${base}/events?after_sequence=${cursor}`)
-  return <section id="activity" className="surface" tabIndex={-1}>
-    <h2>실습 행동 타임라인</h2>
+  return <details className="surface training-timeline">
+    <summary>실습 행동 타임라인</summary>
+    <section id="activity" aria-label="실습 행동 타임라인 기록" tabIndex={-1}>
     {timeline.error && <p role="alert">{timeline.error}</p>}
     {!timeline.data && !timeline.error && <p role="status">행동 기록을 불러오는 중입니다.</p>}
     {timeline.data?.items.length === 0 && <p>이 구간에 표시할 행동이 없습니다.</p>}
@@ -302,13 +321,13 @@ function RunTimeline({ base, titles }: { base: string; titles: Record<string, st
       {cursor > 0 && <button className="secondary" onClick={() => setCursor(0)}>처음 기록</button>}
       {timeline.data?.next_after_sequence != null && <button className="secondary" onClick={() => setCursor(timeline.data!.next_after_sequence!)}>다음 기록</button>}
     </div>
-  </section>
+    </section>
+  </details>
 }
 
-function Knowledge({ base, ticketId, session, readOnly = false }: {
-  base: string; ticketId?: string; session: Session; readOnly?: boolean
+function Knowledge({ base, ticketId, session, readOnly = false, initialQuery = '' }: {
+  base: string; ticketId?: string; session: Session; readOnly?: boolean; initialQuery?: string
 }) {
-  const sops = useResource<{ items: Sop[] }>(base + '/sops')
   const [hits, setHits] = useState<Hit[]>()
   const [error, setError] = useState('')
   const [pending, setPending] = useState(false)
@@ -332,12 +351,13 @@ function Knowledge({ base, ticketId, session, readOnly = false }: {
   }
   return <section id="knowledge" className="surface" tabIndex={-1}>
     <h2>SOP·유사 장애 검색</h2>
-    {(error || sops.error) && <p role="alert">{error || sops.error}</p>}
-    <form onSubmit={search} className="row">
+    {error && <p role="alert">{error}</p>}
+    <form onSubmit={search} className="training-search">
       <div><label htmlFor="training-source-kind">자료 유형</label>
         <select id="training-source-kind" name="kind"><option value="SOP">승인 SOP</option><option value="CASE">유사 장애</option></select></div>
-      <label>검색어<input name="query" maxLength={300} required placeholder="예: 메모리 ECC 오류 재진단" /></label>
-      <button disabled={pending}>검색</button>
+      <label>검색어<input name="query" maxLength={300} required defaultValue={initialQuery.replace(/\s+/g, ' ').trim().slice(0, 300)}
+        placeholder="예: 메모리 ECC 오류 재진단" /></label>
+      <button disabled={pending}>{pending ? '검색 중…' : '검색'}</button>
     </form>
     {pending && <p role="status">검색 중입니다.</p>}
     {hits && (hits.length ? <><p role="status">검색 후보 {hits.length}건입니다. 판단에 사용하기 전에 실제 증상과 출처를 비교하세요.</p>
@@ -345,15 +365,13 @@ function Knowledge({ base, ticketId, session, readOnly = false }: {
       <a href={trainingSourceHref(hit.source_url)}>{hit.title}</a>
       {hit.section && <span> · {hit.section}</span>}
       {hit.page_number && <span> · {hit.page_number}쪽</span>}
-      <p className="knowledge-text">{hit.content}</p>
+      <details className="training-excerpt">
+        <summary><span aria-hidden="true">{hit.content}</span>검색 구절 펼치기 / 접기</summary>
+        <p className="knowledge-text">{hit.content}</p>
+      </details>
+      {hit.source_type === 'SOP' && ticketId && !readOnly &&
+        <LearningControl path={base + '/tickets/' + ticketId} kind="SOP" sourceId={hit.source_id} session={session} />}
     </li>))}</ul></> : <p role="status">검색 결과가 없습니다. 오류 코드나 장비 이름으로 다시 찾아보세요.</p>)}
-    <h3>승인 SOP</h3>
-    {!sops.data && !sops.error && <p role="status">승인 자료를 불러오는 중입니다.</p>}
-    {sops.data?.items.length === 0 && <p>현재 승인 SOP가 없습니다.</p>}
-    <ul className="training-materials">{sops.data?.items.map(sop => <li key={sop.id}><a href={base + '/sops/' + sop.id}>{sop.title}</a>
-      {' · '}<a href={sop.original_url}>원본</a>
-      {ticketId && !readOnly && <LearningControl path={base + '/tickets/' + ticketId} kind="SOP" sourceId={sop.id} session={session} />}
-    </li>)}</ul>
   </section>
 }
 
@@ -452,20 +470,23 @@ function TrainingAnalysis({ base, path, session, readOnly }: { base: string; pat
     } catch (failure) { setError(errorMessage(failure)) }
     finally { setPending(false) }
   }
-  return <section id="analysis" className="surface" tabIndex={-1}>
-    <h2>AI 분석과 권고</h2>
-    <p>권고는 참고 자료로 표시됩니다. 수행한 가상 조치는 별도로 기록됩니다.</p>
+  return <section id="analysis" className="surface training-analysis" tabIndex={-1}>
+    <div className="training-heading"><h2>AI 분석과 권고</h2><Badge tone="info">AI 참고 자료</Badge></div>
+    <p className="meta">호스트 이력과 SOP를 대조한 뒤 판단하세요. 조치 결과는 가상 조치 기록에서 확인할 수 있습니다.</p>
     {error && <p role="alert">{error}</p>}
     {!readOnly && <form onSubmit={analyze} className="row">
       <label>분석 질문<textarea name="question" rows={2} maxLength={2000} required
         placeholder="예: 메모리 오류의 가능한 원인과 다음 점검 순서를 알려줘" /></label>
-      <button disabled={pending || active}>분석 요청</button>
+      <button disabled={pending || active}>{pending ? '요청 중…' : active ? '분석 진행 중' : '분석 요청'}</button>
     </form>}
-    {active && <p role="status">분석 중입니다.</p>}
+    {active && <Feedback>분석 중입니다.</Feedback>}
     {analysis?.error && <div className="notice" role="alert"><strong>AI 분석 실패</strong><p>{analysis.error.message}</p>
       <p>호스트 이력과 SOP, 가상 조치 및 인계는 계속 사용할 수 있습니다.</p></div>}
     {readOnly && !analysisId && <p>이 주소에 연결된 분석 기록이 없습니다.</p>}
-    {analysis?.result && <ReportView report={analysis.result} sourceHref={trainingSourceHref} />}
+    {analysis?.result && <>
+      <Feedback kind="success">AI 분석이 완료되었습니다.</Feedback>
+      <div className="training-workgrid training-analysis-results"><ReportView report={analysis.result} sourceHref={trainingSourceHref} /></div>
+    </>}
   </section>
 }
 

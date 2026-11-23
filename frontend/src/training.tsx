@@ -4,6 +4,7 @@ import type { Session } from './api'
 import { TrainingWorkspace } from './training-workspace'
 import { TrainingSource, isTrainingSource } from './training-source'
 import { TrainingSopList } from './training-sops'
+import { Badge, Feedback } from './ui'
 
 interface Run {
   id: string
@@ -81,7 +82,7 @@ function TrainingHome({ session }: { session: Session }) {
       {error && <div className="notice" role="alert">{error} {!summary && <button type="button" className="secondary" onClick={() => {
         setError(''); setRevision(value => value + 1)
       }}>다시 불러오기</button>}</div>}
-      {!error && !summary && <p role="status">실습을 불러오는 중입니다.</p>}
+      {!error && !summary && <Feedback>실습을 불러오는 중입니다.</Feedback>}
       {summary && <>
         {!summary.active_run_id && <section className="surface">
           <h2>{history.length ? '새 실습 또는 재실습' : '새 실습'}</h2>
@@ -95,11 +96,12 @@ function TrainingHome({ session }: { session: Session }) {
           {pending && <p role="status">새 실습을 준비하고 있습니다.</p>}
         </section>}
         <section className="surface"><h2>실습 기록</h2>
-          {history.length === 0 ? <p>저장된 실습 기록이 없습니다.</p> : <ul className="training-list">{history.map(item => (
+          {history.length === 0 ? <Feedback kind="empty">저장된 실습 기록이 없습니다.</Feedback> : <ul className="training-list">{history.map(item => (
             <li key={item.id}><div><strong>{item.scenario.key} v{item.scenario.version}</strong>
               <p className="meta">{new Date(item.completed_at ?? item.started_at).toLocaleString('ko-KR', { timeZone: 'Asia/Seoul' })} KST</p></div>
-              <a href={`/simulation-runs/${item.id}${item.status === 'COMPLETED' ? '#evaluation' : ''}`}>
-                {item.status === 'ACTIVE' ? '진행 중인 근무 열기' : '완료 결과 보기'}</a></li>
+              <div className="row"><Badge tone={item.status === 'ACTIVE' ? 'info' : 'success'}>{item.status === 'ACTIVE' ? '진행 중' : '완료'}</Badge>
+                <a href={`/simulation-runs/${item.id}${item.status === 'COMPLETED' ? '#evaluation' : ''}`}>
+                  {item.status === 'ACTIVE' ? '진행 중인 근무 열기' : '완료 결과 보기'}</a></div></li>
           ))}</ul>}
         </section>
       </>}
