@@ -146,6 +146,18 @@
 
 해당 API는 교육생 세션과 기존 변경 요청 검사를 사용한다. 다른 소유자·로그인 세션의 제안은 `404 ACTION_NOT_FOUND`, 만료·취소·이미 사용된 제안과 화면 불일치는 `409 ACTION_STALE`이다. SOP 후보에 없는 ID는 `409 ACTION_TARGET_INVALID`, 승인 철회된 문서는 `404`를 반환한다. 제안과 결과는 대화 보관 기간 안에서 확인할 수 있다.
 
+### 키로 다단계 워크플로
+
+지원하는 복합 목표의 첫 `POST /companion/chat` 요청에 `action_view_id`를 함께 보내면 서버가 `workflow`를 포함한 채팅 항목을 돌려준다. 같은 `GET /companion/chat/{conversation_id}`로 서버 진행 상태를 조회한다. 필드는 `id`, `kind`, `goal`, `status`, `current_step_index`, `steps`, `context_fingerprint`, `expires_at`, `can_resume`, `error_code`, 모델·임베딩 호출 수다. 일반 응답에서는 `workflow`가 `null`이다.
+
+`POST /companion/chat/{conversation_id}/workflows/{message_id}`는 `command`(`pause`, `cancel`, `resume`), `view_id`, 현재 `page_context`를 받는다. 검색 결과가 없어서 대기 중이면 `resume`에 `clue`를 함께 보낸다. 결과는 기존 채팅 항목 형식이다. 다른 컨텍스트에서 재개하면 `409 WORKFLOW_CONTEXT_CHANGED`, 활성 워크플로가 있으면 `409 WORKFLOW_BUSY`를 반환한다.
+
+UI 단계는 기존 액션 승인·피드백 API를 사용한다. 워크플로의 페이지 이동 및 SOP 열기 성공 피드백에는 실제 도착한 `destination_context`와 새 `destination_view_id`를 함께 보낸다. 서버가 승인한 대상과 일치하면 완료를 기록하고 후속 UI 단계에는 새로운 승인 제안을 발급한다. 동일한 피드백을 다시 보내도 다음 단계를 중복 시작하지 않는다.
+
+복합 워크플로의 `goal_requirements`는 요청 목표를 실행 단계와 연결하며, 각 단계는 검증한 결과를 `result`에 기록한다. `workflow.outcome`은 수행된 작업, 참고 근거, 미완료 작업을 담는다. SOP 비교 응답의 `sop_comparison`은 검색으로 확인한 후보, 문서별 관련성·적용 범위·한계와 선택적 추천을 반환한다. 비교 후 열기를 요청한 경우 `workflow.input_kind`가 `sop_selection`인 동안 같은 액션 엔드포인트에 `decision: "select"`와 `sop_id`를 먼저 보내고, 선택된 ID에 대해 별도로 승인한다.
+
+발신 인계 이동 피드백은 현재 실습의 `workspace` 및 `outgoing` 섹션을 확인한다. 다음 설명 단계는 갱신된 컨텍스트로 워커 큐에서 이어서 처리한다. 강조가 필요하면 등록된 `outgoing-handover` 제안을 별도로 승인한다. 브라우저는 승인된 라우트 전환으로 기존 뷰를 닫을 때 `/actions/invalidate`에 `transition_proposal_id`를 보낸다. 이 값은 진행 중인 승인 이동 제안과 일치할 때만 적용된다.
+
 ## 인수인계
 
 | 메서드와 경로 | 요청·응답 | 권한·조건 |

@@ -1,12 +1,14 @@
 export type ActionType = 'navigate_to_page' | 'open_sop' | 'highlight_element' | 'focus_input'
 type RouteId = 'practice_home' | 'workspace' | 'ticket_list' | 'outgoing_handover' | 'sop_library'
-type AnchorId = 'search-sop' | 'ticket-search' | 'sop-query'
+type AnchorId = 'search-sop' | 'ticket-search' | 'sop-query' | 'outgoing-handover'
+export type ActionDecision = 'approve' | 'cancel' | 'select'
 export type ActionFailure = 'target_unavailable' | 'context_changed' | 'navigation_failed'
 export type Proposal = {
   id: string; type: ActionType; view_id: string; label: string; expires_at: string;
   status: 'pending' | 'approved' | 'cancelled' | 'stale' | 'expired' | 'succeeded' | 'failed';
   anchor_id?: AnchorId; route_id?: RouteId;
   options?: { sop_id: string; title: string }[]; error_code?: ActionFailure;
+  requires_selection?: boolean; chosen_sop_id?: string;
 }
 
 const routes: Record<RouteId, { suffix: string; target: string }> = {
@@ -20,6 +22,7 @@ const anchors: Record<AnchorId, string> = {
   'search-sop': '[data-companion-anchor="search-sop"]',
   'ticket-search': '[data-companion-anchor="ticket-search"]',
   'sop-query': '[data-companion-anchor="sop-query"]',
+  'outgoing-handover': '[data-companion-anchor="outgoing-handover"]',
 }
 export const actionLabels: Record<ActionType, string> = {
   navigate_to_page: '이동', open_sop: '문서 열기', highlight_element: '강조', focus_input: '검색창으로 이동',
@@ -53,7 +56,9 @@ export function actionLocation() {
   return window.location.pathname + window.location.search + window.location.hash
 }
 
-async function navigate(path: string, selector: string, sourceId?: string): Promise<ActionFailure | undefined> {
+type ConfirmDestination = (path: string, deadline: number) => Promise<ActionFailure | undefined>
+
+async function navigate(path: string, selector: string, sourceId?: string, confirm?: ConfirmDestination): Promise<ActionFailure | undefined> {
   if (actionLocation() !== path) {
     const oldURL = window.location.href
     window.history.pushState(null, '', path)
@@ -66,7 +71,7 @@ async function navigate(path: string, selector: string, sourceId?: string): Prom
     const target = document.querySelector<HTMLElement>(selector)
     if (target && displayable(target) && (!sourceId || target.dataset.companionSourceId === sourceId)) {
       target.scrollIntoView({ block: 'start' })
-      return
+      return confirm?.(path, deadline)
     }
     await new Promise(resolve => window.setTimeout(resolve, 50))
   }
@@ -74,7 +79,7 @@ async function navigate(path: string, selector: string, sourceId?: string): Prom
 }
 
 export async function executeCompanionAction(command: unknown, location: string, proposal: Proposal,
-  selectedSop?: string): Promise<ActionFailure | undefined> {
+  selectedSop?: string, confirm?: ConfirmDestination): Promise<ActionFailure | undefined> {
   if (location !== actionLocation()) return 'context_changed'
   if (typeof command !== 'object' || !command) return 'target_unavailable'
   const data = command as { type?: unknown; run_id?: unknown; route_id?: unknown; anchor_id?: unknown; sop_id?: unknown }
@@ -85,11 +90,11 @@ export async function executeCompanionAction(command: unknown, location: string,
   if (data.type === 'navigate_to_page' && typeof data.route_id === 'string' && data.route_id === proposal.route_id
       && Object.hasOwn(routes, data.route_id)) {
     const route = routes[data.route_id as RouteId]
-    if (data.route_id === 'practice_home') return navigate(route.suffix, route.target)
-    if (runId) return navigate(`/simulation-runs/${runId}${route.suffix}`, route.target)
+    if (data.route_id === 'practice_home') return navigate(route.suffix, route.target, undefined, confirm)
+    if (runId) return navigate(`/simulation-runs/${runId}${route.suffix}`, route.target, undefined, confirm)
   }
   if (data.type === 'open_sop' && runId && typeof data.sop_id === 'string' && uuid.test(data.sop_id) && data.sop_id === selectedSop) {
-    return navigate(`/simulation-runs/${runId}/sops/${data.sop_id}`, '[data-companion-destination="sop"]', data.sop_id)
+    return navigate(`/simulation-runs/${runId}/sops/${data.sop_id}`, '[data-companion-destination="sop"]', data.sop_id, confirm)
   }
   if ((data.type === 'highlight_element' || data.type === 'focus_input') && typeof data.anchor_id === 'string'
       && data.anchor_id === proposal.anchor_id && Object.hasOwn(anchors, data.anchor_id)) {

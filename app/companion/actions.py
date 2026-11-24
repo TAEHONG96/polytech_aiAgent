@@ -18,7 +18,9 @@ ANCHORS = {
     "search-sop": ("SOP 검색 버튼", {"workspace", "ticket"}),
     "sop-query": ("SOP 검색어 입력", {"workspace", "ticket"}),
     "ticket-search": ("티켓 검색창", {"workspace"}),
+    "outgoing-handover": ("발신 인계 섹션", {"workspace"}),
 }
+HIGHLIGHT_ONLY = {"search-sop", "outgoing-handover"}
 SECTIONS = {
     "tickets": "실습 티켓 표에서 티켓을 열거나 검색어와 상태로 목록을 좁힐 수 있어요.",
     "knowledge": "SOP·유사 장애 영역에서 승인 문서와 과거 사례를 찾고 출처를 열어 볼 수 있어요.",
@@ -110,7 +112,10 @@ def proposal_view(run, result: dict, now: datetime) -> dict | None:
         return None
     proposal = {key: value for key, value in stored.items() if key not in {"decided_at", "completed_at", "selected_sop_id"}}
     if proposal["status"] == "pending":
-        if run.companion.get("action_view_closed"):
+        flow = result.get("workflow")
+        valid_flow = flow and (flow["status"] == "WAITING_APPROVAL"
+                               or flow["status"] == "WAITING_USER_INPUT" and proposal.get("requires_selection"))
+        if (flow and not valid_flow) or (not flow and run.companion.get("action_view_closed")):
             proposal["status"] = "stale"
         elif now >= datetime.fromisoformat(proposal["expires_at"]):
             proposal["status"] = "expired"
@@ -129,7 +134,8 @@ def execution_command(db: Session, proposal: dict, context: PageContext, selecte
             return {"type": kind, "run_id": context.run_id, "route_id": proposal["route_id"]}
     if kind in {"highlight_element", "focus_input"} and selected is None and proposal.get("anchor_id") in ANCHORS:
         anchor = proposal["anchor_id"]
-        if context.page_id in ANCHORS[anchor][1] and (kind != "focus_input" or anchor != "search-sop"):
+        if (context.page_id in ANCHORS[anchor][1] and (kind != "focus_input" or anchor not in HIGHLIGHT_ONLY)
+                and (anchor != "outgoing-handover" or context.section == "outgoing")):
             return {"type": kind, "anchor_id": anchor}
     raise ApiError(409, "ACTION_TARGET_INVALID", "제안 범위에서 실행할 대상을 다시 선택해 주세요.")
 

@@ -127,7 +127,8 @@ export function TrainingHandover({ base, session, status }: { base: string; sess
   const completed = status === 'COMPLETED'
   const paused = status === 'PAUSED'
   const finalized = completed || draft?.status === 'FINALIZED'
-  return <section className="surface" id="outgoing" tabIndex={-1}>
+  return <section className="surface" id="outgoing" tabIndex={-1}
+    data-companion-anchor={draft ? 'outgoing-handover' : undefined}>
     <div className="training-heading"><h2>다음 Bot에게 인계</h2>{draft && <span className="training-badge">
       {finalized ? '확정 · 읽기 전용' : paused ? '초안 · 읽기 전용' : '초안'} · 리비전 {draft.revision}</span>}</div>
     {error && <div className="notice" role="alert"><strong>{error.title}</strong><p>{error.message}</p>

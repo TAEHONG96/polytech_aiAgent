@@ -74,7 +74,11 @@ def claim_run() -> Work | None:
         if run.status == RunStatus.RUNNING:
             fail_run(run, AnalysisFailure("AI_WORKER_INTERRUPTED", "분석이 중단되었습니다. 다시 시도할 수 있습니다.", retryable=True))
             return None
-        deadline = min(run.created_at + timedelta(seconds=QUEUE_SECONDS), now + timedelta(seconds=RUN_SECONDS))
+        flow = (run.result or {}).get("workflow")
+        queued_at = datetime.fromisoformat(flow["queued_at"]) if flow else run.created_at
+        deadline = min(queued_at + timedelta(seconds=QUEUE_SECONDS), now + timedelta(seconds=RUN_SECONDS))
+        if flow:
+            deadline = min(deadline, datetime.fromisoformat(flow["expires_at"]))
         if deadline <= now:
             fail_run(run, AnalysisFailure("AI_QUEUE_EXPIRED", "분석 요청 대기 시간이 초과되었습니다.", retryable=True))
             return None
@@ -125,6 +129,9 @@ async def execute(work: Work, model, usage: Usage) -> dict:
         if seconds <= 0:
             raise AnalysisFailure("AI_TIMEOUT", "분석 실행 시간이 초과되었습니다.", retryable=True)
         if work.companion is not None:
+            if work.companion.get("workflow_kind"):
+                from app.companion.workflow_worker import run_workflow
+                return await run_workflow(work, model, usage)
             from app.companion.service import answer_chat
             return await answer_chat(work, model, usage, seconds=seconds, now=utcnow())
         if work.handover_id is not None:
@@ -181,7 +188,7 @@ def process_agent_run(model_factory=generator) -> bool:
                 authorized_handover(db, work)
             elif work.companion is None and work.simulation_run_id is not None and work.ticket_id is None:
                 raise PermissionError("Invalid training analysis scope")
-        if work.companion is not None:
+        if work.companion is not None and not work.companion.get("workflow_kind"):
             from app.companion.service import answer_without_model
             result = answer_without_model(work)
             answered_from_records = result is not None

@@ -47,7 +47,7 @@ class ChatInput(StrictInput):
 
 ActionType = Literal["navigate_to_page", "open_sop", "highlight_element", "focus_input"]
 RouteId = Literal["practice_home", "workspace", "ticket_list", "outgoing_handover", "sop_library"]
-AnchorId = Literal["search-sop", "ticket-search", "sop-query"]
+AnchorId = Literal["search-sop", "ticket-search", "sop-query", "outgoing-handover"]
 
 
 class ActionDraft(StrictInput):
@@ -75,9 +75,13 @@ class ActionView(StrictInput):
     view_id: UUID
 
 
+class ActionInvalidation(ActionView):
+    transition_proposal_id: UUID | None = None
+
+
 class ActionDecision(ActionView):
     proposal_id: UUID
-    decision: Literal["approve", "cancel"]
+    decision: Literal["approve", "cancel", "select"]
     page_context: PageContext
     sop_id: UUID | None = None
 
@@ -86,6 +90,8 @@ class ActionFeedback(ActionView):
     proposal_id: UUID
     outcome: Literal["succeeded", "failed"]
     error_code: Literal["target_unavailable", "context_changed", "navigation_failed"] | None = None
+    destination_context: PageContext | None = None
+    destination_view_id: UUID | None = None
 
     @model_validator(mode="after")
     def check_outcome(self):

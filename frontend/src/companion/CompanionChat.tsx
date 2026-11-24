@@ -8,18 +8,24 @@ import { useCompanionContextStore } from './companion-context'
 import type { CompanionPageContext } from './companion-context'
 import { companionChatRequestedEvent } from './companion-events'
 import { CompanionActionCard } from './CompanionActionCard'
+import { CompanionWorkflowCard, CompanionWorkflowOutcome } from './CompanionWorkflowCard'
+import type { Workflow, WorkflowCommand } from './CompanionWorkflowCard'
 import { actionLocation, executeCompanionAction } from './companion-actions'
-import type { ActionFailure, Proposal } from './companion-actions'
+import type { ActionDecision, ActionFailure, Proposal } from './companion-actions'
 
 type Phase = 'chatting' | 'thinking' | 'happy' | 'surprised' | null
 type PageInput = { page_id: string; run_id?: string; ticket_id?: string; section?: string; sop_id?: string;
   incident_id?: string; handover_revision?: number; analysis_id?: string; search_state?: string }
+type Destination = { destination_context: PageInput; destination_view_id: string }
+type SopAssessment = { sop_id: string; title: string; reason?: string; match?: string; scope?: string; limitation: string }
 type Body = { conversation_id: string; request_id: string; page_context: PageInput; message: string; active_hint_id?: string; action_view_id?: string }
 type Turn = { message_id: string; request_id: string; status: 'queued' | 'running' | 'succeeded' | 'failed';
   message: string; answer?: string; context_info: PageInput & { label: string }; active_hint_id?: string;
   sources: { key: string; title: string; source_url: string; section?: string }[];
   execution_mode?: 'gemini' | 'mock' | 'workflow' | 'error'; provider?: string;
   action_proposal?: Proposal | null;
+  workflow?: Workflow | null;
+  sop_comparison?: { recommended_sop_id: string | null; reason: string; candidates: SopAssessment[] } | null;
   retrieval?: 'found' | 'empty' | 'unavailable' | 'not_scoped' | 'not_required'; error?: { message: string; retryable: boolean } }
 type Saved = { id: string; open: boolean; receipt?: { id: string; at: number } }
 
@@ -90,6 +96,7 @@ export function CompanionChat({ session, hidden, setPhase, returnFocus }: {
   const [refresh, setRefresh] = useState(0)
   const [resetting, setResetting] = useState(false)
   const [runningAction, setRunningAction] = useState<string>()
+  const [workingFlow, setWorkingFlow] = useState<string>()
   const [actionReaction, setActionReaction] = useState<'happy' | 'surprised'>()
   const [actionClock, setActionClock] = useState(Date.now)
   const [browserLocation, setBrowserLocation] = useState(actionLocation)
@@ -99,7 +106,7 @@ export function CompanionChat({ session, hidden, setPhase, returnFocus }: {
   const list = useRef<HTMLDivElement>(null)
   const follow = useRef(true)
   const live = useRef(true)
-  const previous = useRef<{ id: string; status: Turn['status'] }>(undefined)
+  const previous = useRef<{ id: string; status: Turn['status']; flow?: Workflow['status'] }>(undefined)
   const contextStore = useCompanionContextStore()
   const context = useSyncExternalStore(contextStore?.subscribe ?? noSubscription, contextStore?.getCurrentPageContext ?? noContext)
   const label = context?.resources.ticket?.number ? `실습 티켓 ${context.resources.ticket.number}` : context?.pageTitle ?? '일반 DCO 질문'
@@ -111,6 +118,10 @@ export function CompanionChat({ session, hidden, setPhase, returnFocus }: {
   const activeView = useRef<string>(undefined)
   const usedView = useRef<string>(undefined)
   const actionLock = useRef(false)
+  const routeTransition = useRef<{ view: string; proposal: string }>(undefined)
+  const destinationWait = useRef<(unmount?: boolean) => void>(undefined)
+  const latestView = useRef({ actionView, contextStore })
+  useLayoutEffect(() => { latestView.current = { actionView, contextStore } }, [actionView, contextStore])
 
   useEffect(() => {
     const sync = () => setBrowserLocation(actionLocation())
@@ -128,16 +139,22 @@ export function CompanionChat({ session, hidden, setPhase, returnFocus }: {
   useLayoutEffect(() => {
     if (!visible) return
     activeView.current = actionView.id
-    const invalidate = () => {
+    const invalidate = (preserveTransition: boolean) => {
       if (activeView.current === actionView.id) activeView.current = undefined
       if (usedView.current !== actionView.id) return
       usedView.current = undefined
+      const transition = routeTransition.current
+      const transition_proposal_id = preserveTransition && transition?.view === actionView.id ? transition.proposal : undefined
       void api(`${base}/${saved.id}/actions/invalidate`, { method: 'POST', keepalive: true,
-        body: JSON.stringify({ view_id: actionView.id }) }, session.csrf_token).catch(() => {})
+        body: JSON.stringify({ view_id: actionView.id, transition_proposal_id }) }, session.csrf_token)
+        .then(() => { if (live.current) setRefresh(value => value + 1) }).catch(() => {})
     }
-    window.addEventListener('pagehide', invalidate)
-    return () => { window.removeEventListener('pagehide', invalidate); invalidate() }
+    const hide = () => invalidate(false)
+    window.addEventListener('pagehide', hide)
+    return () => { window.removeEventListener('pagehide', hide); invalidate(true) }
   }, [visible, actionView, saved.id, session.csrf_token])
+  useLayoutEffect(() => { destinationWait.current?.() }, [actionView, context, visible])
+  useEffect(() => () => destinationWait.current?.(true), [])
 
   useEffect(() => {
     if (!visible) return
@@ -180,7 +197,9 @@ export function CompanionChat({ session, hidden, setPhase, returnFocus }: {
         const reconnect = saved.receipt && !history.turns.some(turn => turn.request_id === saved.receipt?.id)
           && Date.now() - saved.receipt.at < 12_000
         if (saved.receipt && !reconnect) setSaved(value => value.receipt?.id === saved.receipt?.id ? { ...value, receipt: undefined } : value)
-        if (reconnect || history.turns.some(isWaiting)) timer = window.setTimeout(read, 1000)
+        if (reconnect || history.turns.some(turn => isWaiting(turn) || turn.workflow?.status === 'WAITING_APPROVAL'
+            || turn.workflow?.input_kind === 'sop_selection'))
+          timer = window.setTimeout(read, 1000)
       } catch (failure) { if (!abort.signal.aborted) setLoadError(errorMessage(failure)) }
     }
     void read()
@@ -193,12 +212,15 @@ export function CompanionChat({ session, hidden, setPhase, returnFocus }: {
     if (visible) {
       const justFinished = last && last.message_id === previous.current?.id
         && (previous.current.status === 'queued' || previous.current.status === 'running') && !isWaiting(last)
-      phase = waiting || runningAction ? 'thinking'
-        : actionReaction ?? (justFinished && !last.action_proposal ? (last.status === 'succeeded' ? 'happy' : 'surprised') : 'chatting')
+      const flow = last?.workflow?.status
+      const flowFinished = last?.message_id === previous.current?.id && previous.current?.flow !== flow
+      phase = waiting || runningAction ? 'thinking' : actionReaction ?? (flow
+        ? flowFinished && flow === 'COMPLETED' ? 'happy' : flowFinished && flow === 'FAILED' ? 'surprised' : 'chatting'
+        : justFinished && !last.action_proposal ? (last.status === 'succeeded' ? 'happy' : 'surprised') : 'chatting')
     }
-    if (last) previous.current = { id: last.message_id, status: last.status }
+    if (last) previous.current = { id: last.message_id, status: last.status, flow: last.workflow?.status }
     setPhase(phase)
-  }, [visible, waiting, runningAction, actionReaction, last?.message_id, last?.status, setPhase])
+  }, [visible, waiting, runningAction, actionReaction, last?.message_id, last?.status, last?.workflow?.status, setPhase])
 
   async function send(body: Body, snapshotLabel: string) {
     follow.current = true
@@ -223,7 +245,7 @@ export function CompanionChat({ session, hidden, setPhase, returnFocus }: {
 
   function submit(event: FormEvent) {
     event.preventDefault()
-    if (!message.trim() || waiting || resetting || actionLock.current) return
+    if (!message.trim() || waiting || resetting || workingFlow || actionLock.current) return
     const current = contextStore?.getCurrentPageContext()
     const validHint = instruction?.path === current?.pathname && instruction?.section === current?.section ? instruction?.id : undefined
     const body = { conversation_id: saved.id, request_id: crypto.randomUUID(), page_context: requestContext(current),
@@ -233,7 +255,7 @@ export function CompanionChat({ session, hidden, setPhase, returnFocus }: {
     void send(body, label)
   }
 
-  async function decideAction(turn: Turn, proposal: Proposal, decision: 'approve' | 'cancel', selected?: string) {
+  async function decideAction(turn: Turn, proposal: Proposal, decision: ActionDecision, selected?: string) {
     if (actionLock.current || waiting || resetting || !canDecide(proposal)) return
     actionLock.current = true
     setRunningAction(proposal.id)
@@ -244,29 +266,84 @@ export function CompanionChat({ session, hidden, setPhase, returnFocus }: {
     const update = (status: Proposal['status'], error_code?: ActionFailure) => setTurns(current => current.map(item =>
       item.message_id === turn.message_id ? { ...item, action_proposal: { ...proposal, status, error_code } } : item))
     try {
-      const response = await api<{ status: 'approved' | 'cancelled'; command: unknown }>(endpoint, { method: 'POST',
+      const response = await api<{ status: 'approved' | 'cancelled' | 'selected'; command: unknown }>(endpoint, { method: 'POST',
         body: JSON.stringify({ ...identity, decision, sop_id: selected, page_context: requestContext(contextStore?.getCurrentPageContext()) }) }, session.csrf_token)
+      if (response.status === 'selected') return
       update(response.status)
       if (response.status === 'approved') {
         let failure: ActionFailure | undefined = 'context_changed'
+        let destination: Destination | undefined
+        const changesView = turn.workflow && (proposal.type === 'open_sop' || proposal.type === 'navigate_to_page')
         if (activeView.current === proposal.view_id) {
-          try { failure = await executeCompanionAction(response.command, actionView.location, proposal, selected) }
-          catch { failure = 'target_unavailable' }
+          if (changesView) routeTransition.current = { view: proposal.view_id, proposal: proposal.id }
+          try {
+            failure = await executeCompanionAction(response.command, actionView.location, proposal, selected, changesView
+              ? async (path, deadline) => {
+                const confirmed = await confirmedDestination(path, deadline, proposal.view_id)
+                if (typeof confirmed === 'string') return confirmed
+                destination = confirmed
+                usedView.current = confirmed.destination_view_id
+              } : undefined)
+          } catch { failure = 'target_unavailable' }
         }
         const outcome = failure ? 'failed' : 'succeeded'
         update(outcome, failure)
-        setActionReaction(failure ? 'surprised' : 'happy')
+        setActionReaction(failure ? 'surprised' : turn.workflow ? undefined : 'happy')
         await api(`${endpoint}/feedback`, { method: 'POST', keepalive: true,
-          body: JSON.stringify({ ...identity, outcome, error_code: failure }) }, session.csrf_token)
+          body: JSON.stringify({ ...identity, ...destination, outcome, error_code: failure }) }, session.csrf_token)
+        if (destination && activeView.current !== destination.destination_view_id) {
+          await api(`${base}/${saved.id}/actions/invalidate`, { method: 'POST', keepalive: true,
+            body: JSON.stringify({ view_id: destination.destination_view_id }) }, session.csrf_token)
+        }
       }
     } catch (failure) {
       setError(errorMessage(failure))
       setActionReaction('surprised')
     } finally {
+      routeTransition.current = undefined
       actionLock.current = false
       setRunningAction(undefined)
       setRefresh(value => value + 1)
     }
+  }
+
+  function confirmedDestination(path: string, deadline: number, previousView: string): Promise<Destination | ActionFailure> {
+    return new Promise(resolve => {
+      const finish = (result: Destination | ActionFailure) => {
+        window.clearTimeout(timer)
+        destinationWait.current = undefined
+        resolve(result)
+      }
+      const timer = window.setTimeout(() => finish('navigation_failed'), Math.max(0, deadline - performance.now()))
+      destinationWait.current = (unmount) => {
+        if (unmount || actionLocation() !== path) return finish('context_changed')
+        const latest = latestView.current
+        const current = latest.contextStore?.getCurrentPageContext()
+        if (!current || current.pathname !== window.location.pathname || latest.actionView.location !== path
+            || activeView.current !== latest.actionView.id || latest.actionView.id === previousView
+            || (current.section ?? '') !== window.location.hash.slice(1)) return
+        if (current.section === 'outgoing') {
+          if (current.resources.handover?.phase === 'error') return finish('navigation_failed')
+          if (current.resources.handover?.phase !== 'ready') return
+        }
+        finish({ destination_context: requestContext(current), destination_view_id: latest.actionView.id })
+      }
+      destinationWait.current()
+    })
+  }
+
+  async function controlWorkflow(turn: Turn, command: WorkflowCommand, clue?: string) {
+    if (workingFlow || actionLock.current) return
+    setWorkingFlow(turn.message_id)
+    setError('')
+    setActionReaction(undefined)
+    if (command === 'resume') usedView.current = actionView.id
+    try {
+      const updated = await api<Turn>(`${base}/${saved.id}/workflows/${turn.message_id}`, { method: 'POST',
+        body: JSON.stringify({ command, clue, view_id: actionView.id, page_context: requestContext(contextStore?.getCurrentPageContext()) }) }, session.csrf_token)
+      setTurns(current => current.map(item => item.message_id === updated.message_id ? updated : item))
+    } catch (failure) { setError(errorMessage(failure)) }
+    finally { setWorkingFlow(undefined); setRefresh(value => value + 1) }
   }
 
   function canDecide(proposal: Proposal) {
@@ -313,6 +390,19 @@ export function CompanionChat({ session, hidden, setPhase, returnFocus }: {
       {turns.map(turn => <article key={turn.message_id} className="companion-chat-turn">
         <p className="meta">{turn.context_info.label}{turn.active_hint_id && ' · 힌트 질문'}</p>
         <p className="companion-chat-question">{turn.message}</p>
+        {turn.workflow && <CompanionWorkflowCard workflow={turn.workflow} busy={!!workingFlow || !!runningAction}
+          control={(command, clue) => void controlWorkflow(turn, command, clue)} />}
+        {turn.sop_comparison && <section className="companion-action-card" aria-label="승인 SOP 관련성 비교">
+          <strong>승인 SOP 관련성 비교</strong>
+          <p>{turn.sop_comparison.reason}</p>
+          <ul>{turn.sop_comparison.candidates.map(candidate => <li key={candidate.sop_id}>
+            <strong>{candidate.title}</strong>{candidate.sop_id === turn.sop_comparison?.recommended_sop_id && ' · 우선 참고'}
+            {candidate.reason && <p>{candidate.reason}</p>}
+            {candidate.match && <p>일치하는 관측 · {candidate.match}</p>}
+            {candidate.scope && <p>적용 범위 · {candidate.scope}</p>}
+            <p>확인할 한계 · {candidate.limitation}</p>
+          </li>)}</ul>
+        </section>}
         {turn.answer && <div className="companion-chat-answer"><Answer text={turn.answer} />
           {(turn.execution_mode === 'mock' || turn.provider === 'fake') && <p className="meta">모의 응답</p>}
           {(turn.execution_mode === 'gemini' || turn.provider === 'gemini') && <p className="meta">Gemini 응답</p>}
@@ -324,8 +414,11 @@ export function CompanionChat({ session, hidden, setPhase, returnFocus }: {
           ))}</ul>}
         </div>}
         {turn.action_proposal && <CompanionActionCard key={turn.action_proposal.id} proposal={turn.action_proposal}
-          active={canDecide(turn.action_proposal)} busy={!!runningAction || waiting || resetting}
+          active={canDecide(turn.action_proposal) && (!turn.workflow || turn.workflow.status === 'WAITING_APPROVAL'
+            || turn.workflow.input_kind === 'sop_selection')}
+          busy={!!runningAction || !!workingFlow || waiting || resetting}
           decide={(decision, selected) => void decideAction(turn, turn.action_proposal!, decision, selected)} />}
+        {turn.workflow?.outcome && <CompanionWorkflowOutcome outcome={turn.workflow.outcome} />}
         {turn.error && <p className="notice" role="alert">{turn.error.message}{turn.error.retryable && !waiting && <button type="button" className="secondary"
           onClick={() => {
             const { label: snapshot, ...page_context } = turn.context_info
@@ -349,8 +442,8 @@ export function CompanionChat({ session, hidden, setPhase, returnFocus }: {
             event.preventDefault(); event.currentTarget.form?.requestSubmit()
           }
         }} /></label>
-      <div><button type="button" className="secondary" disabled={!!sending || !!runningAction || resetting || (!turns.length && !retry)} onClick={() => void reset()}>대화 초기화</button>
-        <button type="submit" disabled={waiting || !!runningAction || resetting || !message.trim()}>전송</button></div>
+      <div><button type="button" className="secondary" disabled={!!sending || !!runningAction || !!workingFlow || resetting || (!turns.length && !retry)} onClick={() => void reset()}>대화 초기화</button>
+        <button type="submit" disabled={waiting || !!runningAction || !!workingFlow || resetting || !message.trim()}>전송</button></div>
       </form>
     </div>
   </section>

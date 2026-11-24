@@ -65,6 +65,31 @@ class FakeGenerator:
 
     async def generate(self, contents: list[types.Content], config: types.GenerateContentConfig):
         request = json.loads(contents[0].parts[0].text)
+        if request.get("purpose") == "workflow_plan":
+            return reply(types.Part(text=json.dumps({"steps": request["allowed_steps"]})))
+        if request.get("purpose") == "workflow_compare_sops":
+            ticket, sources = request["verified_ticket"], request["evidence"]
+            assessments = [{"key": source["key"], "reason": f"{ticket['title']}의 관측을 문서 발췌와 대조하는 합성 평가입니다.",
+                            "match": ticket["observed_error"] or ticket["description"][:120],
+                            "scope": (source["matched_excerpt"] or source["document_excerpt"])[:150],
+                            "limitation": "실제 적용 여부는 문서의 전체 적용 조건과 추가 관측을 확인하세요."} for source in sources]
+            return reply(types.Part(text=json.dumps({"assessments": assessments, "recommended_key": sources[0]["key"],
+                "recommendation_reason": "이 합성 테스트에서는 첫 후보의 발췌문을 우선 확인합니다."}, ensure_ascii=False)))
+        if request.get("purpose") == "workflow_explain_handover":
+            context = request["verified"]
+            return reply(types.Part(text=json.dumps({
+                "purpose": f"발신 인계는 다음 Bot에게 업무를 전달하는 화면이에요. 현재 리비전은 {context['handover']['handover_revision']}입니다.",
+                "review_fields": "화면에서 " + ", ".join(context["outgoing_fields"]) + " 항목을 확인하세요.",
+                "previous_vs_current": "이전 Bot 인계는 근무 영역의 참고 기록이며, 발신 인계는 현재 교육생의 교대 기록입니다.",
+                "next_shift": "다음 Bot은 인계 요약과 포함된 티켓별 다음 조치를 읽습니다.",
+                "unresolved_work": "포함된 티켓의 상태와 기록된 다음 조치를 함께 확인하세요.",
+            }, ensure_ascii=False)))
+        if request.get("purpose") == "workflow_summary":
+            ticket, sources = request["verified"], request["evidence"]
+            answer = (f"**관측된 사실** · {ticket['title']}. {ticket['description']}\n\n"
+                      f"**다음 확인 항목** · {ticket['next_action'] or '관측 로그와 승인 SOP를 비교해 주세요.'}\n\n"
+                      "**아직 확인되지 않은 사항** · 장애 원인과 추가 점검 결과")
+            return reply(types.Part(text=json.dumps({"answer": answer, "citation_keys": [sources[0]["key"]]}, ensure_ascii=False)))
         if request.get("purpose") == "companion_chat":
             from app.companion.service import fake_response
 
