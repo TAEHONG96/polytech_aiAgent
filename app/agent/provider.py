@@ -67,6 +67,18 @@ class FakeGenerator:
         request = json.loads(contents[0].parts[0].text)
         if request.get("purpose") == "workflow_plan":
             return reply(types.Part(text=json.dumps({"steps": request["allowed_steps"]})))
+        if request.get("purpose") == "companion_tutor":
+            ticket = request["verified_ticket"]
+            source = next(iter(request["evidence"]), None)
+            subject = ticket["observed_error"] or ticket["title"]
+            guides = {
+                1: f"티켓의 {subject} 관측에서 문서 검색어를 좁히는 데 쓸 단서는 무엇일까요?",
+                2: f"티켓의 장애 개요에서 {subject} 관련 관측을 찾아 승인 SOP 적용 조건과 함께 살펴보세요.",
+                3: (f"{source['title']}의 적용 범위와 {subject} 관측이 일치하는 항목을 골라 기록해 보세요."
+                    if source else f"{subject}의 관측값과 확인 시점을 기록해 다음 비교의 기준을 만들어 보세요."),
+            }
+            return reply(types.Part(text=json.dumps({"answer": guides[request["level"]],
+                "citation_keys": [source["key"]] if source else []}, ensure_ascii=False)))
         if request.get("purpose") == "workflow_compare_sops":
             ticket, sources = request["verified_ticket"], request["evidence"]
             assessments = [{"key": source["key"], "reason": f"{ticket['title']}의 관측을 문서 발췌와 대조하는 합성 평가입니다.",

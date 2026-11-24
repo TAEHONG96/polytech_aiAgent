@@ -1,6 +1,17 @@
 import type { CompanionPageContext } from './companion-context'
 
 export const hintWaitMs = 10_000
+export const adaptiveHintPriority = 0
+
+export type TutorPreference = 'low' | 'normal' | 'high'
+export type TutorCommand = 'view' | 'more' | 'retry'
+export type TutorFeedback = 'EXPIRED' | 'DISMISSED' | 'INVALIDATED'
+export type TutorHintResult = {
+  id: string; level: number; status: 'queued' | 'running' | 'succeeded' | 'failed'; answer?: string;
+  sources: { title: string; source_url: string }[]; execution_mode?: 'gemini' | 'mock' | 'error';
+  error?: { message: string }; can_retry: boolean; model_calls: number; embedding_calls: number; elapsed_ms?: number;
+  search_mode?: 'semantic' | 'keyword';
+}
 
 export type CompanionEvent =
   | { type: 'PAGE_ENTERED'; pageId: CompanionPageContext['pageId'] }
@@ -17,9 +28,10 @@ export type CompanionHint = {
   scope?: string
   targetId?: string
   cooldownMs?: number
+  tutor?: { offerId: string; request?: { id: string; command: TutorCommand }; result?: TutorHintResult; retryTransport?: boolean }
 }
 
-export type ActiveCompanionHint = { hint: CompanionHint; mode: 'ready' | 'open' }
+export type ActiveCompanionHint = { hint: CompanionHint; mode: 'ready' | 'open' | 'loading' }
 
 export function hintScope(context: CompanionPageContext) {
   return context.pathname + '#' + (context.section ?? '')

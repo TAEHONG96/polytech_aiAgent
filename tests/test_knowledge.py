@@ -135,9 +135,17 @@ def test_sdk_uses_separate_content_and_checks_output():
     assert "vendor data" not in str(failure.value)
 
 
-@pytest.mark.parametrize(("upstream", "status", "code"), [(429, 429, "EMBEDDING_RATE_LIMIT"), (503, 503, "EMBEDDING_UNAVAILABLE")])
-def test_worker_http_error_mapping(monkeypatch, upstream, status, code):
-    transport = httpx2.MockTransport(lambda request: httpx2.Response(upstream, text="vendor data"))
+@pytest.mark.parametrize(("upstream", "detail", "status", "code"), [
+    (429, None, 429, "EMBEDDING_RATE_LIMIT"),
+    (409, None, 503, "EMBEDDING_CONFIG"),
+    (503, None, 503, "EMBEDDING_UNAVAILABLE"),
+    (503, "EMBEDDING_CONFIG", 503, "EMBEDDING_CONFIG"),
+    (503, "EMBEDDING_INVALID", 503, "EMBEDDING_INVALID"),
+    (200, None, 503, "EMBEDDING_INVALID"),
+])
+def test_worker_http_error_mapping(monkeypatch, upstream, detail, status, code):
+    response = httpx2.Response(upstream, json={"detail": detail}) if detail else httpx2.Response(upstream, text="vendor data")
+    transport = httpx2.MockTransport(lambda request: response)
     from app.http import ApiError
 
     with httpx2.Client(transport=transport) as client:

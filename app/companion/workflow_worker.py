@@ -202,6 +202,7 @@ async def run_read_step(work, context, result, model, usage, facts, name):
             raise AnalysisFailure("WORKFLOW_SEARCH_UNAVAILABLE", "승인 SOP 검색 시간이 지났습니다.", retryable=True) from exc
         if outcome.status != "ok":
             raise AnalysisFailure("WORKFLOW_SEARCH_UNAVAILABLE", "승인 SOP 검색을 완료하지 못했습니다.", retryable=True)
+        result["search_mode"] = "keyword" if toolbox.used_keyword_search else "semantic"
         sources = {}
         for item in toolbox.evidence.values():
             if item.kind == "SOP" and (item.score is None or item.score >= 0.05):

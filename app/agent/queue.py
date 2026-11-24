@@ -6,7 +6,7 @@ from datetime import datetime, timedelta, timezone
 from threading import Event
 from uuid import UUID, uuid4
 
-from sqlalchemy import or_, select, update
+from sqlalchemy import delete, or_, select, update
 from sqlalchemy.orm import Session
 
 from app.agent.analysis import Trace, Usage, investigate
@@ -129,6 +129,9 @@ async def execute(work: Work, model, usage: Usage) -> dict:
         if seconds <= 0:
             raise AnalysisFailure("AI_TIMEOUT", "분석 실행 시간이 초과되었습니다.", retryable=True)
         if work.companion is not None:
+            if work.companion.get("tutor_hint"):
+                from app.companion.tutor_worker import answer_tutor
+                return await answer_tutor(work, model, usage, seconds)
             if work.companion.get("workflow_kind"):
                 from app.companion.workflow_worker import run_workflow
                 return await run_workflow(work, model, usage)
@@ -188,7 +191,7 @@ def process_agent_run(model_factory=generator) -> bool:
                 authorized_handover(db, work)
             elif work.companion is None and work.simulation_run_id is not None and work.ticket_id is None:
                 raise PermissionError("Invalid training analysis scope")
-        if work.companion is not None and not work.companion.get("workflow_kind"):
+        if work.companion is not None and not (work.companion.get("workflow_kind") or work.companion.get("tutor_hint")):
             from app.companion.service import answer_without_model
             result = answer_without_model(work)
             answered_from_records = result is not None
@@ -227,7 +230,8 @@ def process_agent_run(model_factory=generator) -> bool:
                 run.lease_token = None
                 run.lease_expires_at = None
         if work.companion is not None:
-            chat_logger.info("companion_chat run=%s provider=%s status=%s elapsed_ms=%d model_attempts=%d embedding_requests=%d code=%s",
+            chat_logger.info("%s run=%s provider=%s status=%s elapsed_ms=%d model_attempts=%d embedding_requests=%d code=%s",
+                             "companion_tutor" if work.companion.get("tutor_hint") else "companion_chat",
                              work.id, model.provider if model else "workflow" if answered_from_records else "unavailable",
                              "failed" if failure else "succeeded", round((time.monotonic() - started) * 1000),
                              usage.model_requests, usage.embedding_requests, failure.code if failure else "ok")
@@ -238,12 +242,15 @@ def process_agent_run(model_factory=generator) -> bool:
 
 def process_agent_queue(stop: Event) -> None:
     from app.companion.service import CHAT_TTL
+    from app.companion.tutor import RETENTION
+    from app.companion.tutor_models import TutorOffer
     next_cleanup = 0.0
     while not stop.is_set():
         try:
             if time.monotonic() >= next_cleanup:
                 next_cleanup = time.monotonic() + 300
                 with Session(engine()) as db, db.begin():
+                    db.execute(delete(TutorOffer).where(TutorOffer.created_at < utcnow() - RETENTION))
                     db.execute(update(AgentRun).where(
                         AgentRun.companion["conversation_id"].astext.is_not(None),
                         AgentRun.created_at < utcnow() - CHAT_TTL, AgentRun.status.not_in(ACTIVE_RUNS),

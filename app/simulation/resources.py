@@ -1,7 +1,8 @@
+from datetime import datetime, timezone
 from typing import Annotated
 from uuid import UUID
 
-from fastapi import APIRouter, Query, Response
+from fastapi import APIRouter, Query, Request, Response
 from pydantic import BaseModel, ConfigDict, Field, StringConstraints
 from sqlalchemy import select
 
@@ -9,25 +10,34 @@ from app.agent.models import AgentRun, AgentToolCall
 from app.agent.routes import queue_analysis, run_view
 from app.agent.schemas import MAX_MESSAGE
 from app.auth import WriteUser
+from app.companion.tutor import login_scope, search_receipt
 from app.db import Database
 from app.handover.models import Handover
 from app.handover.schemas import TicketOperations, WorkInput
 from app.handover.ticket_routes import edit_operations, operations, save_work
 from app.http import ApiError
+from app.knowledge.embedding import FakeEmbedder
 from app.knowledge.models import SopDocument, SourceType
 from app.knowledge.routes import SearchRequest, SearchResponse, SopDetail, SopPage, run_search, sop_detail, sop_original, sop_page
 from app.knowledge.search import incident_scope
 from app.models import Ticket
+from app.settings import settings
 from app.simulation.access import OwnedRun, WritableRun
 from app.simulation.models import ScenarioHost, ScenarioIncident
 from app.tickets import ticket_by_id
 
 router = APIRouter(prefix="/simulation-runs/{run_id}", tags=["training resources"])
+FAKE_TRAINING_SOP_MIN_SCORE = 0.13
 
 
 class TrainingSearchRequest(SearchRequest):
     source_types: list[SourceType] = Field(default_factory=lambda: list(SourceType), min_length=1, max_length=3)
     ticket_id: UUID | None = None
+    tutor_tab_id: UUID | None = None
+
+
+class TrainingSearchResponse(SearchResponse):
+    tutor_receipt: str | None = None
 
 
 class TrainingAnalyzeInput(BaseModel):
@@ -74,10 +84,19 @@ def training_original(sop_id: UUID, db: Database, run: OwnedRun):
 
 
 @router.post("/knowledge/search")
-def training_search(body: TrainingSearchRequest, db: Database, run: OwnedRun, user: WriteUser) -> SearchResponse:
+def training_search(body: TrainingSearchRequest, db: Database, run: OwnedRun, user: WriteUser, request: Request) -> TrainingSearchResponse:
     if body.ticket_id is not None:
         ticket_by_id(db, body.ticket_id, run_id=run.id)
-    return run_search(db, body, run_id=run.id, target_id=body.ticket_id)
+    results = run_search(db, body, run_id=run.id, target_id=body.ticket_id)
+    receipt = None
+    if settings().corpus_training and user.role == "trainee" and body.ticket_id and body.source_types == [SourceType.SOP]:
+        # Weak lexical candidates should not look like a successful SOP search in the Fake corpus.
+        if results.embedding_profile == FakeEmbedder.profile.fingerprint:
+            results.results = [source for source in results.results if source.score >= FAKE_TRAINING_SOP_MIN_SCORE]
+        if body.tutor_tab_id:
+            receipt = search_receipt(user.id, run.id, body.ticket_id, body.tutor_tab_id, login_scope(request),
+                                     len(results.results), datetime.now(timezone.utc))
+    return TrainingSearchResponse(**results.model_dump(), tutor_receipt=receipt)
 
 
 # References for the immutable, synthetic historical tickets seeded by revision 0007.

@@ -4,21 +4,22 @@ import { api, errorMessage } from '../api'
 import type { Session } from '../api'
 import { trainingSourceHref } from '../training-source'
 import { companionAsset } from './companion-assets'
-import { useCompanionContextStore } from './companion-context'
-import type { CompanionPageContext } from './companion-context'
+import { requestContext, useCompanionContextStore } from './companion-context'
+import type { PageInput } from './companion-context'
 import { companionChatRequestedEvent } from './companion-events'
 import { CompanionActionCard } from './CompanionActionCard'
 import { CompanionWorkflowCard, CompanionWorkflowOutcome } from './CompanionWorkflowCard'
 import type { Workflow, WorkflowCommand } from './CompanionWorkflowCard'
 import { actionLocation, executeCompanionAction } from './companion-actions'
 import type { ActionDecision, ActionFailure, Proposal } from './companion-actions'
+import { tutorTabId } from './companion-tutor'
+import type { TutorBehavior } from './companion-tutor'
 
 type Phase = 'chatting' | 'thinking' | 'happy' | 'surprised' | null
-type PageInput = { page_id: string; run_id?: string; ticket_id?: string; section?: string; sop_id?: string;
-  incident_id?: string; handover_revision?: number; analysis_id?: string; search_state?: string }
 type Destination = { destination_context: PageInput; destination_view_id: string }
 type SopAssessment = { sop_id: string; title: string; reason?: string; match?: string; scope?: string; limitation: string }
-type Body = { conversation_id: string; request_id: string; page_context: PageInput; message: string; active_hint_id?: string; action_view_id?: string }
+type Body = { conversation_id: string; request_id: string; page_context: PageInput; message: string; active_hint_id?: string; action_view_id?: string;
+  tutor_offer_id?: string; tutor_tab_id?: string }
 type Turn = { message_id: string; request_id: string; status: 'queued' | 'running' | 'succeeded' | 'failed';
   message: string; answer?: string; context_info: PageInput & { label: string }; active_hint_id?: string;
   sources: { key: string; title: string; source_url: string; section?: string }[];
@@ -26,6 +27,8 @@ type Turn = { message_id: string; request_id: string; status: 'queued' | 'runnin
   action_proposal?: Proposal | null;
   workflow?: Workflow | null;
   sop_comparison?: { recommended_sop_id: string | null; reason: string; candidates: SopAssessment[] } | null;
+  tutor_level?: number;
+  search_mode?: 'semantic' | 'keyword';
   retrieval?: 'found' | 'empty' | 'unavailable' | 'not_scoped' | 'not_required'; error?: { message: string; retryable: boolean } }
 type Saved = { id: string; open: boolean; receipt?: { id: string; at: number } }
 
@@ -43,17 +46,6 @@ function restore(key: string): Saved {
 
 function save(key: string, value: Saved) {
   try { sessionStorage.setItem(key, JSON.stringify(value)) } catch { /* Keep the current in-memory session. */ }
-}
-
-function requestContext(context?: CompanionPageContext): PageInput {
-  return {
-    page_id: context?.pageId ?? 'home', section: context?.section, run_id: context?.runId, ticket_id: context?.ticketId,
-    sop_id: context?.entity?.type === 'sop' ? context.entity.id : undefined,
-    incident_id: context?.entity?.type === 'incident' ? context.entity.id : undefined,
-    handover_revision: context?.entity?.type === 'handover' ? Number(context.entity.id) : undefined,
-    analysis_id: context?.resources.analysis?.phase === 'ready' ? context.resources.analysis.id : undefined,
-    search_state: context?.resources.search?.phase,
-  }
 }
 
 function inline(text: string) {
@@ -82,8 +74,10 @@ function Answer({ text }: { text: string }) {
 const sourcePath = /^\/api\/v1\/simulation-runs\/[\da-f-]{36}\/(?:sops|tickets)\/[\da-f-]{36}(?:\/incident-sources\/[\da-f-]{36})?$/i
 const isWaiting = (turn: Turn) => turn.status === 'queued' || turn.status === 'running'
 
-export function CompanionChat({ session, hidden, setPhase, returnFocus }: {
+export function CompanionChat({ session, hidden, setPhase, returnFocus, setTutorBusy, recordTutor }: {
   session: Session; hidden: boolean; setPhase: (phase: Phase) => void; returnFocus: () => void
+  setTutorBusy: (busy: boolean) => void;
+  recordTutor: (kind: TutorBehavior, id: string, run: string, ticket: string) => void;
 }) {
   const key = `dco.companion.chat.${session.user.id}`
   const [saved, setSaved] = useState(() => restore(key))
@@ -102,6 +96,7 @@ export function CompanionChat({ session, hidden, setPhase, returnFocus }: {
   const [browserLocation, setBrowserLocation] = useState(actionLocation)
   const [viewEpoch, advanceView] = useState(0)
   const [instruction, setInstruction] = useState<{ id: string; path: string; section?: string }>()
+  const [tutorLink, setTutorLink] = useState<{ id: string; path: string; section?: string; expires: number }>()
   const textarea = useRef<HTMLTextAreaElement>(null)
   const list = useRef<HTMLDivElement>(null)
   const follow = useRef(true)
@@ -170,12 +165,26 @@ export function CompanionChat({ session, hidden, setPhase, returnFocus }: {
     const open = (event: WindowEventMap[typeof companionChatRequestedEvent]) => {
       const current = contextStore?.getCurrentPageContext()
       if (event.detail?.hintId && current) setInstruction({ id: event.detail.hintId, path: current.pathname, section: current.section })
+      if (event.detail?.tutorOfferId && current) {
+        setTutorLink({ id: event.detail.tutorOfferId, path: current.pathname, section: current.section, expires: Date.now() + 9 * 60_000 })
+      }
+      if (event.detail?.suggestedMessage) setMessage(event.detail.suggestedMessage)
       setSaved(value => ({ ...value, open: true }))
       textarea.current?.focus({ preventScroll: true })
     }
     window.addEventListener(companionChatRequestedEvent, open)
     return () => window.removeEventListener(companionChatRequestedEvent, open)
   }, [contextStore])
+  useEffect(() => { setTutorBusy(visible || !!sending || !!runningAction || !!workingFlow) },
+    [visible, sending, runningAction, workingFlow, setTutorBusy])
+  useEffect(() => {
+    for (const turn of turns) {
+      const { run_id, ticket_id } = turn.context_info
+      if (!turn.workflow || !run_id || !ticket_id) continue
+      if (turn.workflow.steps.some(step => step.status === 'COMPLETED')) recordTutor('WORKFLOW_STEP_COMPLETED', turn.message_id, run_id, ticket_id)
+      if (turn.workflow.status === 'CANCELLED') recordTutor('WORKFLOW_CANCELLED', turn.message_id, run_id, ticket_id)
+    }
+  }, [turns, recordTutor])
   useLayoutEffect(() => { save(key, saved) }, [key, saved])
   useLayoutEffect(() => {
     if (visible) { follow.current = true; textarea.current?.focus({ preventScroll: true }) }
@@ -248,8 +257,11 @@ export function CompanionChat({ session, hidden, setPhase, returnFocus }: {
     if (!message.trim() || waiting || resetting || workingFlow || actionLock.current) return
     const current = contextStore?.getCurrentPageContext()
     const validHint = instruction?.path === current?.pathname && instruction?.section === current?.section ? instruction?.id : undefined
+    const offerId = tutorLink?.path === current?.pathname && tutorLink?.section === current?.section && tutorLink && tutorLink.expires > Date.now()
+      ? tutorLink.id : undefined
     const body = { conversation_id: saved.id, request_id: crypto.randomUUID(), page_context: requestContext(current),
-      message: message.trim(), active_hint_id: validHint, action_view_id: actionView.id }
+      message: message.trim(), active_hint_id: validHint, action_view_id: actionView.id,
+      tutor_offer_id: offerId, tutor_tab_id: offerId ? tutorTabId() : undefined }
     setMessage('')
     setInstruction(undefined)
     void send(body, label)
@@ -360,6 +372,7 @@ export function CompanionChat({ session, hidden, setPhase, returnFocus }: {
       setTurns([])
       setMessage('')
       setInstruction(undefined)
+      setTutorLink(undefined)
       setRetry(undefined)
       setLoadError('')
       textarea.current?.focus({ preventScroll: true })
@@ -392,6 +405,7 @@ export function CompanionChat({ session, hidden, setPhase, returnFocus }: {
         <p className="companion-chat-question">{turn.message}</p>
         {turn.workflow && <CompanionWorkflowCard workflow={turn.workflow} busy={!!workingFlow || !!runningAction}
           control={(command, clue) => void controlWorkflow(turn, command, clue)} />}
+        {turn.search_mode === 'keyword' && <p className="meta">근거 검색 · 키워드 검색</p>}
         {turn.sop_comparison && <section className="companion-action-card" aria-label="승인 SOP 관련성 비교">
           <strong>승인 SOP 관련성 비교</strong>
           <p>{turn.sop_comparison.reason}</p>
@@ -403,7 +417,8 @@ export function CompanionChat({ session, hidden, setPhase, returnFocus }: {
             <p>확인할 한계 · {candidate.limitation}</p>
           </li>)}</ul>
         </section>}
-        {turn.answer && <div className="companion-chat-answer"><Answer text={turn.answer} />
+        {turn.answer && <div className="companion-chat-answer">
+          {turn.tutor_level && <p className="meta">힌트 {turn.tutor_level}/3단계</p>}<Answer text={turn.answer} />
           {(turn.execution_mode === 'mock' || turn.provider === 'fake') && <p className="meta">모의 응답</p>}
           {(turn.execution_mode === 'gemini' || turn.provider === 'gemini') && <p className="meta">Gemini 응답</p>}
           {(turn.execution_mode === 'workflow' || turn.provider === 'workflow') && <p className="meta">실습 업무 규칙·기록 기반</p>}

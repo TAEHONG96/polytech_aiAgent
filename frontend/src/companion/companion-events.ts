@@ -9,7 +9,7 @@ export type CompanionCommand =
   | { type: 'state'; state: CompanionState }
   | { type: 'hint'; text: string }
   | { type: 'hint-request' | 'hint-dismiss' }
-  | { type: 'chat'; hintId?: string }
+  | { type: 'chat'; hintId?: string; tutorOfferId?: string; suggestedMessage?: string }
   | { type: 'move'; position: CompanionPosition }
 
 export const companionCommandEvent = 'dco:companion-command'
@@ -18,7 +18,7 @@ export const companionChatRequestedEvent = 'dco:companion-chat-requested'
 declare global {
   interface WindowEventMap {
     [companionCommandEvent]: CustomEvent<CompanionCommand>
-    [companionChatRequestedEvent]: CustomEvent<{ hintId?: string }>
+    [companionChatRequestedEvent]: CustomEvent<{ hintId?: string; tutorOfferId?: string; suggestedMessage?: string }>
   }
 }
 

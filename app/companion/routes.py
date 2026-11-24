@@ -84,7 +84,9 @@ def turn_view(db, run: AgentRun):
             "context_info": info, "timestamp": run.created_at,
             "answer": result.get("answer"), "sources": result.get("sources", []),
             "retrieval": result.get("retrieval"), "intent": result.get("intent"), "error": error,
+            "search_mode": result.get("search_mode"),
             "provider": run.provider, "model": run.model, "execution_mode": mode,
+            "tutor_level": (run.companion.get("tutor_hint") or {}).get("level"),
             "action_proposal": proposal_view(run, result, utcnow()), "workflow": workflow,
             "sop_comparison": (result.get("workflow") or {}).get("data", {}).get("sop_comparison")}
 
@@ -103,10 +105,21 @@ def chat(body: ChatInput, db: Database, user: WriteUser, request: Request, respo
         metadata.update(action_view_id=str(body.action_view_id), action_session=session_binding(request))
         if kind := requested_workflow(message, context):
             metadata["workflow_kind"] = kind
+    if body.tutor_offer_id:
+        from app.companion.tutor_routes import linked_workflow
+
+        metadata.update(tutor_offer_id=str(body.tutor_offer_id), tutor_tab_id=str(body.tutor_tab_id))
+        if body.action_view_id and (kind := linked_workflow(message)):
+            metadata["workflow_kind"] = kind
     previous = db.scalar(conversation_rows(user.id, body.conversation_id).where(
         AgentRun.companion["request_id"].astext == str(body.request_id)))
     if previous:
-        prior = {key: value for key, value in previous.companion.items() if key != "action_view_closed"}
+        tutor = previous.companion.get("tutor_hint") or {}
+        if (body.tutor_offer_id and tutor.get("id") == str(body.tutor_offer_id)
+                and tutor.get("tab_id") == str(body.tutor_tab_id) and previous.message == message
+                and previous.companion["page_context"] == metadata["page_context"]):
+            return turn_view(db, previous)
+        prior = {key: value for key, value in previous.companion.items() if key not in {"action_view_closed", "linked_tutor_hint"}}
         if previous.message != message or prior != metadata:
             raise ApiError(409, "CHAT_REQUEST_CONFLICT", "같은 요청 ID에 다른 질문을 보낼 수 없습니다.")
         return turn_view(db, previous)
@@ -118,6 +131,18 @@ def chat(body: ChatInput, db: Database, user: WriteUser, request: Request, respo
         AgentRun.requested_by == user.id, AgentRun.companion.is_not(None), AgentRun.created_at >= now - timedelta(minutes=1)))
     if count >= 8:
         raise ApiError(429, "CHAT_RATE_LIMIT", "키로 질문이 많습니다. 잠시 뒤 다시 시도하세요.")
+    if body.tutor_offer_id:
+        from app.companion.tutor_routes import TUTOR_MORE, linked_offer, log_event, queue_hint
+
+        offer, last_hint = linked_offer(db, user.id, request, body, now)
+        if kind:
+            log_event(offer, "WORKFLOW_REQUESTED", now, kind=kind)
+        elif TUTOR_MORE.search(message):
+            if active_workflow(db, user.id, now):
+                raise ApiError(409, "WORKFLOW_BUSY", "진행 중인 워크플로가 끝난 뒤 힌트를 요청해 주세요.")
+            hint_run = queue_hint(db, offer, context, body.request_id, "more", now, conversation_id=body.conversation_id, message=message)
+            return turn_view(db, hint_run)
+        metadata["linked_tutor_hint"] = str(last_hint.id)
     result = {"workflow": initial_workflow(kind, context, str(body.action_view_id), now)} if kind else None
     run = AgentRun(requested_by=user.id, ticket_id=context.ticket_id, message=message, simulation_run_id=context.run_id,
                    status=RunStatus.QUEUED, created_at=now, companion=metadata, result=result)

@@ -78,6 +78,7 @@ class Toolbox:
         self._vectors: dict[str, list[float]] = {}
         self._search_attempts: dict[str, int] = {}
         self.embedding_requests = 0
+        self.used_keyword_search = False
 
     def _add_source(self, **data) -> Evidence:
         signature = data["kind"], data["source_id"], data.get("chunk_index"), data.get("ticket_version")
@@ -176,16 +177,23 @@ class Toolbox:
             parts.append(f"교육생 자유 메모: {details['note']}")
         return "\n".join(parts)
 
-    async def _search(self, name: str, args: SearchArgs) -> list[Evidence]:
+    async def _search(self, name: str, args: SearchArgs) -> tuple[list[Evidence], str]:
         with Session(engine()) as db:
             worker_scope(db, self.user_id, self.run_id)
         provider = self.provider or get_embedder()
         self.provider = provider
         query = clean_text(args.query, 300).strip()
         qkey = " ".join(query.casefold().split())
+        search_mode = "semantic"
         if qkey not in self._vectors:
             self.embedding_requests += 1
-            self._vectors[qkey] = await asyncio.to_thread(provider.query, query)
+            try:
+                self._vectors[qkey] = await asyncio.to_thread(provider.query, query)
+            except EmbeddingFailure as exc:
+                if (self.run_id is None or provider.profile.provider != "gemini"
+                        or exc.code != "EMBEDDING_UNAVAILABLE"):
+                    raise
+                search_mode = "keyword"
         category = SourceType.SOP if name == "search_sop" else SourceType.TICKET
         with Session(engine()) as db:
             db.execute(text("SET LOCAL statement_timeout = '4s'"))
@@ -200,10 +208,11 @@ class Toolbox:
             if category == SourceType.TICKET and target is not None:
                 categories.append(SourceType.INCIDENT)
             results = search_index(
-                db, vector=self._vectors[qkey], profile=provider.profile.fingerprint, source_types=categories,
+                db, vector=self._vectors.get(qkey), profile=provider.profile.fingerprint, source_types=categories,
                 limit=args.limit, run_id=self.run_id, target=target,
                 exclude_ticket_id=self.ticket_id if category == SourceType.TICKET else None,
                 min_score=calibrated_min_score(provider.profile.fingerprint),
+                keyword_query=query if search_mode == "keyword" else None,
             )
         sources = []
         for result in results:
@@ -219,7 +228,9 @@ class Toolbox:
             ))
             if len(sources) == args.limit:
                 break
-        return sources
+        if search_mode == "keyword":
+            self.used_keyword_search = True
+        return sources, search_mode
 
     async def execute(self, name: str, raw: object) -> ToolOutcome:
         if name not in SPECS:
@@ -254,7 +265,9 @@ class Toolbox:
 
         try:
             if isinstance(args, SearchArgs):
-                sources = await self._search(name, args)
+                sources, mode = await self._search(name, args)
+                if mode == "keyword":
+                    summary["search_mode"] = mode
             else:
                 sources = self._read_tickets(name, args)
         except PermissionError:
@@ -267,6 +280,7 @@ class Toolbox:
             return ToolOutcome("error", {"error": "TOOL_UNAVAILABLE"}, {**summary, "error_code": "TOOL_UNAVAILABLE"})
 
         return ToolOutcome(
-            "ok", {"untrusted_data": [source.model_dump(mode="json") for source in sources]},
+            "ok", {"untrusted_data": [source.model_dump(mode="json") for source in sources],
+                   **({"search_mode": "keyword"} if summary.get("search_mode") == "keyword" else {})},
             {**summary, "source_count": len(sources), "citation_keys": [source.key for source in sources]},
         )

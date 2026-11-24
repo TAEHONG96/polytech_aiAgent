@@ -66,6 +66,7 @@ class SearchRequest(BaseModel):
 class SearchResponse(BaseModel):
     results: list[SearchResult]
     embedding_profile: str
+    search_mode: Literal["semantic", "keyword"] = "semantic"
 
 
 def _summary(document: SopDocument, job: IndexJob, run_id: UUID | None = None) -> SopSummary:
@@ -228,17 +229,24 @@ def search(body: SearchRequest, db: Database, user: WriteUser) -> SearchResponse
 def run_search(db: Session, body: SearchRequest, *, run_id: UUID | None = None,
                target_id: UUID | None = None) -> SearchResponse:
     try:
-        profile = embedding_profile().fingerprint
+        profile = embedding_profile()
     except EmbeddingFailure as exc:
         raise ApiError(503, exc.code, str(exc)) from exc
     db.rollback()  # Release the authentication transaction before the worker request.
-    vector = worker_query_vector(body.query, profile)
+    try:
+        vector = worker_query_vector(body.query, profile.fingerprint)
+    except ApiError as exc:
+        if run_id is None or profile.provider != "gemini" or exc.code != "EMBEDDING_UNAVAILABLE":
+            raise
+        vector = None
     target = None
     if target_id is not None:
         from app.tickets import ticket_by_id
         target = ticket_by_id(db, target_id, run_id=run_id)
     results = search_index(
-        db, vector=vector, profile=profile, source_types=body.source_types, limit=body.limit,
-        min_score=calibrated_min_score(profile), run_id=run_id, target=target,
+        db, vector=vector, profile=profile.fingerprint, source_types=body.source_types, limit=body.limit,
+        min_score=calibrated_min_score(profile.fingerprint), run_id=run_id, target=target,
+        keyword_query=body.query if vector is None else None,
     )
-    return SearchResponse(results=results, embedding_profile=profile)
+    return SearchResponse(results=results, embedding_profile=profile.fingerprint,
+                          search_mode="keyword" if vector is None else "semantic")

@@ -168,9 +168,14 @@ def verified_history(db: Session, work, current: PageContext, now) -> list[dict]
             info = scoped_result(db, work.requested_by, context, turn.result)
         except ApiError:
             continue
+        result = turn.result or {}
+        comparison = ((result.get("workflow") or {}).get("data") or {}).get("sop_comparison") or {}
+        answer = result.get("answer") or comparison.get("reason")
+        if not answer:
+            continue
         history.append({"historical_context": info["label"], "ticket_id": info["ticket_id"],
-                        "intent": turn.result.get("intent") or classify(turn.message),
-                        "question": clean_text(turn.message, 400), "answer": clean_text(turn.result["answer"], 650)})
+                        "intent": result.get("intent") or classify(turn.message),
+                        "question": clean_text(turn.message, 400), "answer": clean_text(answer, 650)})
     return history
 
 
@@ -209,6 +214,15 @@ async def answer_chat(work, model, usage, *, seconds, now) -> dict:
         check_chat_requester(db, work.requested_by)
         info, facts, page_sop = scoped_context(db, work.requested_by, context, details=intent != Intent.GENERAL_QUESTION)
         history = verified_history(db, work, context, now)
+        if run_id := work.companion.get("linked_tutor_hint"):
+            hint = db.get(AgentRun, UUID(run_id))
+            if (hint and hint.requested_by == work.requested_by and hint.ticket_id == context.ticket_id and hint.result):
+                try:
+                    scoped_result(db, work.requested_by, context, hint.result)
+                except ApiError:
+                    pass
+                else:
+                    history.append({"tutor_hint": hint.result["answer"], "ticket_id": str(context.ticket_id)})
 
     previous = history[-1] if history else {}
     search = plan["type"] == "open_sop" if plan else needs_sop(
@@ -216,6 +230,7 @@ async def answer_chat(work, model, usage, *, seconds, now) -> dict:
     )
     search_state = "not_scoped" if search else "not_required"
     sources = [page_sop] if search and page_sop else []
+    search_mode = None
     if search and context.run_id:
         toolbox = Toolbox(work.requested_by, context.ticket_id, run_id=context.run_id)
         query = clean_text(work.message, 160)
@@ -249,11 +264,13 @@ async def answer_chat(work, model, usage, *, seconds, now) -> dict:
                 if item.kind in {"SIMILAR_TICKET", "HISTORICAL_INCIDENT"} and (item.score is None or item.score >= 0.05):
                     sources.append(item)
         usage.embedding_requests += toolbox.embedding_requests
+        search_mode = "keyword" if toolbox.used_keyword_search else "semantic"
 
     payload = {"purpose": "companion_chat", "intent": intent, "message": clean_text(work.message, 2000), "current_context": info,
                "verified": facts if intent != Intent.GENERAL_QUESTION else [],
                "history": history if intent != Intent.GENERAL_QUESTION else [], "retrieval": search_state,
                "hint_topic": work.companion.get("active_hint_id"), "allowed_action": plan,
+               "search_mode": search_mode,
                "evidence": [source.model_dump(mode="json") for source in sources]}
     response = await budget.invoke(model, [user_content(payload)], types.GenerateContentConfig(
         system_instruction=POLICY, response_mime_type="application/json",
@@ -272,7 +289,7 @@ async def answer_chat(work, model, usage, *, seconds, now) -> dict:
     answer = output.answer
     if proposal:
         answer = "아래 제안을 확인해 주세요." if proposal["type"] != "open_sop" else "관련 승인 SOP를 찾았어요. 열 문서를 아래에서 선택해 주세요."
-    return {"answer": clean_text(answer, 3500), "action_proposal": proposal,
+    return {"answer": clean_text(answer, 3500), "action_proposal": proposal, "search_mode": search_mode,
             "sources": [source.model_dump(mode="json", exclude={"content"})
                                                                 for source in cited], "retrieval": search_state, "intent": intent,
             "context_info": info, "validation_sources": [

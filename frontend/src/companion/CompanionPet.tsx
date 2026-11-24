@@ -1,6 +1,7 @@
 import { useCallback, useId, useLayoutEffect, useRef, useState } from 'react'
 import type { CSSProperties, PointerEvent } from 'react'
 import type { Session } from '../api'
+import { trainingSourceHref } from '../training-source'
 import { CompanionChat } from './CompanionChat'
 import { companionAsset } from './companion-assets'
 import { createCompanionController, initialCompanionView } from './companion-controller'
@@ -11,6 +12,8 @@ import type { DragSample } from './companion-movement'
 import { useCompanionContextStore } from './companion-context'
 import type { CompanionPageContext } from './companion-context'
 import { contextEvents, createHintHistory, hintScope, isContextHintId, selectHints } from './companion-hints'
+import type { TutorFeedback, TutorPreference } from './companion-hints'
+import { sendTutorFeedback, useAdaptiveTutor } from './companion-tutor'
 import './companion.css'
 
 type Gesture = { id: number; start: CompanionPosition; origin: CompanionPosition; dragged: boolean; wasHint: boolean; samples: DragSample[] }
@@ -37,6 +40,7 @@ export default function CompanionPet({ session }: { session: Session }) {
   const context = useCompanionContextStore()
   const hintId = useId()
   const [view, setView] = useState(initialCompanionView)
+  const [tutorBusy, setTutorBusy] = useState(false)
   const [history] = useState(createHintHistory)
   const [imageStatus, setImageStatus] = useState<Partial<Record<CompanionState, 'ready' | 'failed'>>>({})
   const positioner = useRef<HTMLDivElement>(null)
@@ -44,6 +48,10 @@ export default function CompanionPet({ session }: { session: Session }) {
   const hintPanel = useRef<HTMLDivElement>(null)
   const closeHintButton = useRef<HTMLButtonElement>(null)
   const controller = useRef<ReturnType<typeof createCompanionController> | null>(null)
+  const feedback = useCallback((offerId: string, event: TutorFeedback) => sendTutorFeedback(session, offerId, event), [session])
+  const feedbackRef = useRef(feedback)
+  useLayoutEffect(() => { feedbackRef.current = feedback }, [feedback])
+  const recordTutor = useAdaptiveTutor({ store: context, session, view, busy: tutorBusy, controller })
   const gesture = useRef<Gesture | null>(null)
   const syncPointerTarget = useRef<(() => void) | null>(null)
   const setChatPhase = useCallback<ReturnType<typeof createCompanionController>['setChatPhase']>(phase => {
@@ -85,6 +93,7 @@ export default function CompanionPet({ session }: { session: Session }) {
     }
 
     const pet = createCompanionController({
+      tutorFeedback: (offerId, event) => feedbackRef.current(offerId, event),
       readArea: readMovementArea,
       render: setView,
       place(next, width) {
@@ -182,7 +191,7 @@ export default function CompanionPet({ session }: { session: Session }) {
   useLayoutEffect(() => { context?.setActiveHint(view.activeHint) }, [context, view.activeHint])
 
   useLayoutEffect(() => {
-    if (view.activeHint?.mode !== 'open' || !hintPanel.current || !positioner.current) return
+    if (!view.activeHint || view.activeHint.mode === 'ready' || !hintPanel.current || !positioner.current) return
     const panel = hintPanel.current
     const position = positioner.current
     const place = () => positionHint(panel, position)
@@ -204,16 +213,18 @@ export default function CompanionPet({ session }: { session: Session }) {
   }, [view.activeHint])
 
   function closeHint() {
-    controller.current?.dismissHint()
+    controller.current?.dismissHint('DISMISSED')
     button.current?.focus({ preventScroll: true })
   }
 
-  function askKiro() {
+  function askKiro(workflow = false) {
     const current = context?.getCurrentPageContext()
     const active = controller.current?.getActiveHint()
     if (!current || active?.mode !== 'open' || active.hint.scope !== hintScope(current)) return
-    controller.current?.dismissHint()
-    controller.current?.command({ type: 'chat', hintId: isContextHintId(active.hint.id) ? active.hint.id : undefined })
+    const tutorOfferId = active.hint.tutor?.result?.status === 'succeeded' ? active.hint.tutor.offerId : undefined
+    controller.current?.dismissHint('TRANSFER')
+    controller.current?.command({ type: 'chat', hintId: isContextHintId(active.hint.id) ? active.hint.id : undefined,
+      tutorOfferId, suggestedMessage: workflow && tutorOfferId ? '승인 SOP를 찾아 비교하고 내가 선택한 문서를 열어줘.' : undefined })
   }
 
   function startPointer(event: PointerEvent<HTMLButtonElement>) {
@@ -272,13 +283,17 @@ export default function CompanionPet({ session }: { session: Session }) {
     isReady('idle') ? 'idle' : companionStates.find(isReady)
   )
 
+  const tutor = view.activeHint?.hint.tutor
+  const tutorResult = tutor?.result
+  const canRequestMore = tutorResult?.status === 'succeeded' && tutorResult.level < 3
   return <div className="companion-widget">
     <div className="companion-positioner" ref={positioner} hidden={view.hidden || !visible}>
       <button type="button" className="companion-pet" ref={button} aria-label="키로 컴패니언"
         data-state={view.state} data-direction={view.direction} data-paused={view.paused}
         data-interaction={view.interaction ?? undefined} data-impact={view.impact}
-        data-hint={view.activeHint?.mode} aria-expanded={view.activeHint ? view.activeHint.mode === 'open' : undefined}
-        aria-controls={view.activeHint?.mode === 'open' ? hintId : undefined}
+        data-hint={view.activeHint?.mode} data-adaptive-hint={tutor ? view.activeHint?.mode : undefined}
+        aria-expanded={view.activeHint ? view.activeHint.mode !== 'ready' : undefined}
+        aria-controls={view.activeHint && view.activeHint.mode !== 'ready' ? hintId : undefined}
         aria-describedby={view.activeHint?.mode === 'ready' ? hintId : undefined}
         style={{
           '--companion-flight-angle': `${view.flightAngle ?? 0}deg`,
@@ -299,14 +314,36 @@ export default function CompanionPet({ session }: { session: Session }) {
         </span>
       </button>
       {view.activeHint?.mode === 'ready' && <span id={hintId} className="companion-hint-ready" role="status">
-        키로에게 확인할 힌트가 있습니다.
+        {tutor ? '맞춤 힌트' : '화면 안내'}
       </span>}
-      {view.activeHint?.mode === 'open' && <div id={hintId} ref={hintPanel} className="companion-hint" role="group" aria-label="키로 힌트"
+      {view.activeHint && view.activeHint.mode !== 'ready' && <div id={hintId} ref={hintPanel} className="companion-hint" role="group" aria-label="키로 힌트"
         onKeyDown={event => { if (event.key === 'Escape') { event.preventDefault(); closeHint() } }}>
-        <p role="status">{view.activeHint.hint.message}</p>
+        {view.activeHint.mode === 'loading' ? <p role="status">맞춤 힌트를 만드는 중이에요.</p> : tutorResult ? <>
+          {tutorResult.level > 0 && <p className="meta">맞춤 힌트 {tutorResult.level}/3단계{tutorResult.execution_mode === 'mock' ? ' · 모의 응답'
+            : tutorResult.execution_mode === 'gemini' ? ' · Gemini 응답' : ''}</p>}
+          <p className="companion-hint-text" role="status" tabIndex={0}>{tutorResult.answer || tutorResult.error?.message}</p>
+          {tutorResult.search_mode === 'keyword' && <p className="meta">근거 검색 · 키워드 검색</p>}
+          {tutorResult.sources.length > 0 && <ul>{tutorResult.sources.map(source => <li key={source.source_url}>
+            <a href={trainingSourceHref(source.source_url)}>{source.title}</a>
+          </li>)}</ul>}
+        </> : <>
+          <p className="meta">화면 안내</p>
+          <p className="companion-hint-text" role="status" tabIndex={0}>{view.activeHint.hint.message}</p>
+          {view.activeHint.hint.id === 'SOP_SEARCH_EMPTY' && view.tutorEnabled && view.tutorFrequency === 'high'
+            && context?.getCurrentPageContext().pageId === 'ticket' &&
+            <p className="meta">같은 티켓에서 5분 안에 두 번 연속 검색 결과가 없으면 맞춤 힌트가 표시될 수 있어요.</p>}
+        </>}
         <div className="companion-hint-actions">
           <button type="button" className="secondary" ref={closeHintButton} onClick={closeHint}>힌트 닫기</button>
-          <button type="button" onClick={askKiro}>키로에게 질문</button>
+          {view.activeHint.mode === 'open' && <>
+            {canRequestMore && <button type="button"
+              onClick={() => controller.current?.beginTutorRequest('more')}>조금 더 알려줘</button>}
+            {tutorResult?.status === 'failed' && tutorResult.can_retry && <button type="button" className="secondary"
+              onClick={() => controller.current?.beginTutorRequest('retry')}>힌트 다시 요청</button>}
+            {tutorResult?.status === 'succeeded' && <button type="button" className="secondary"
+              onClick={() => askKiro(true)}>관련 SOP 비교 요청</button>}
+            <button type="button" className={canRequestMore ? 'secondary' : undefined} onClick={() => askKiro()}>키로에게 질문</button>
+          </>}
         </div>
       </div>}
     </div>
@@ -317,6 +354,12 @@ export default function CompanionPet({ session }: { session: Session }) {
           onChange={event => controller.current?.setPreferences({ hidden: !event.target.checked })} />캐릭터 표시</label>
         <label><input type="checkbox" checked={view.paused}
           onChange={event => controller.current?.setPreferences({ paused: event.target.checked })} />애니메이션 정지</label>
+        <label><input type="checkbox" checked={view.tutorEnabled}
+          onChange={event => controller.current?.setPreferences({ tutorEnabled: event.target.checked })} />선제적 맞춤 힌트</label>
+        <label>맞춤 힌트 빈도<select disabled={!view.tutorEnabled} value={view.tutorFrequency}
+          onChange={event => controller.current?.setPreferences({ tutorFrequency: event.target.value as TutorPreference })}>
+          <option value="low">적음</option><option value="normal">기본</option><option value="high">많음</option>
+        </select></label>
         {import.meta.env.DEV && <label className="companion-preview">상태 미리보기
           <select value={view.preview ?? ''} disabled={view.hidden}
             onChange={event => controller.current?.preview(companionStates.find(state => state === event.target.value) ?? null)}>
@@ -330,7 +373,8 @@ export default function CompanionPet({ session }: { session: Session }) {
         </div>}
       </div>
     </details>}
-    <CompanionChat session={session} hidden={view.hidden} setPhase={setChatPhase} returnFocus={focusPet} />
+    <CompanionChat session={session} hidden={view.hidden} setPhase={setChatPhase} returnFocus={focusPet}
+      setTutorBusy={setTutorBusy} recordTutor={recordTutor} />
   </div>
 
   function debugHint(kind: 'normal' | 'priority') {

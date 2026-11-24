@@ -43,6 +43,14 @@ class ChatInput(StrictInput):
     page_context: PageContext = Field(default_factory=PageContext)
     active_hint_id: Hint | None = None
     action_view_id: UUID | None = None
+    tutor_offer_id: UUID | None = None
+    tutor_tab_id: UUID | None = None
+
+    @model_validator(mode="after")
+    def check_tutor_link(self):
+        if (self.tutor_offer_id is None) != (self.tutor_tab_id is None):
+            raise ValueError("Incomplete tutor reference")
+        return self
 
 
 ActionType = Literal["navigate_to_page", "open_sop", "highlight_element", "focus_input"]

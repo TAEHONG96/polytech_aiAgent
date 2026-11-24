@@ -227,6 +227,29 @@ test('읽는 중에는 높은 우선순위 이벤트가 덮어쓰지 않고 정�
   await expect(pet(page)).not.toHaveAttribute('data-hint', 'ready')
 })
 
+test('긴 힌트 본문을 마우스 휠과 키보드로 스크롤할 수 있다', async ({ page }) => {
+  await page.setViewportSize({ width: 1000, height: 600 })
+  await page.goto(run + '#knowledge')
+  await expect(pet(page)).toBeVisible()
+  await page.evaluate(text => window.dispatchEvent(new CustomEvent('dco:companion-command', {
+    detail: { type: 'hint', text },
+  })), '관측 시각과 현재 장비 상태를 기록하고, 승인 문서의 점검 항목과 비교해 보세요. '.repeat(20))
+  await openHint(page)
+
+  const answer = bubble(page).getByRole('status')
+  expect(await answer.evaluate(node => node.scrollHeight)).toBeGreaterThan(await answer.evaluate(node => node.clientHeight))
+  const bounds = (await answer.boundingBox())!
+  const initialPageScroll = await page.evaluate(() => window.scrollY)
+  await page.mouse.move(bounds.x + bounds.width / 2, bounds.y + bounds.height / 2)
+  await page.mouse.wheel(0, 120)
+  await expect.poll(() => answer.evaluate(node => node.scrollTop), { timeout: 2000 }).toBeGreaterThan(0)
+  expect(await page.evaluate(() => window.scrollY)).toBe(initialPageScroll)
+
+  await answer.press('Home')
+  await expect.poll(() => answer.evaluate(node => node.scrollTop)).toBe(0)
+  await expect(bubble(page).getByRole('button', { name: '힌트 닫기' })).toBeInViewport()
+})
+
 test('걷는 도중 힌트를 준비하고 누른 사이 만료되면 채팅으로 이어지지 않는다', async ({ page }) => {
   await page.clock.install()
   await page.goto('/about')

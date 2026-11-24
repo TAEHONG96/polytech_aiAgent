@@ -6,6 +6,7 @@ import { api, ApiError, errorMessage, statuses } from './api'
 import type { Session, SimulationStatus, Status, Ticket } from './api'
 import { TicketOperations } from './ticket-operations'
 import { useCompanionPart } from './companion/companion-context'
+import { tutorTabId } from './companion/companion-tutor'
 import { TrainingEvaluation, TrainingHandover } from './training-evaluation'
 import { trainingSourceHref } from './training-source'
 import { Badge, Feedback, Priority, TicketStatus } from './ui'
@@ -364,9 +365,12 @@ function Knowledge({ base, ticketId, session, readOnly = false, initialQuery = '
   const [error, setError] = useState('')
   const [pending, setPending] = useState(false)
   const [submitted, setSubmitted] = useState<{ kind: 'sop' | 'case'; request: number }>()
+  const [tutorReceipt, setTutorReceipt] = useState<string>()
+  const [keywordSearch, setKeywordSearch] = useState(false)
   const request = useRef<AbortController | null>(null)
   useEffect(() => () => request.current?.abort(), [])
-  useCompanionPart('search', submitted && { ...submitted, phase: error ? 'error' : pending || !hits ? 'loading' : hits.length ? 'ready' : 'empty' })
+  useCompanionPart('search', submitted && { ...submitted, tutorReceipt,
+    phase: error ? 'error' : pending || !hits ? 'loading' : hits.length ? 'ready' : 'empty' })
   async function search(event: FormEvent<HTMLFormElement>) {
     event.preventDefault()
     const input = new FormData(event.currentTarget)
@@ -377,15 +381,22 @@ function Knowledge({ base, ticketId, session, readOnly = false, initialQuery = '
     setSubmitted(previous => ({ kind: kind === 'SOP' ? 'sop' : 'case', request: (previous?.request ?? 0) + 1 }))
     setError('')
     setHits(undefined)
+    setTutorReceipt(undefined)
+    setKeywordSearch(false)
     setPending(true)
     try {
-      const response = await api<{ results: Hit[] }>(base + '/knowledge/search', {
+      const response = await api<{ results: Hit[]; tutor_receipt?: string; search_mode?: 'semantic' | 'keyword' }>(base + '/knowledge/search', {
         method: 'POST', signal: controller.signal, body: JSON.stringify({
           query: input.get('query'), source_types: kind === 'SOP' ? ['SOP'] : ticketId ? ['TICKET', 'INCIDENT'] : ['TICKET'],
           ticket_id: ticketId,
+          tutor_tab_id: session.corpus_training && ticketId && kind === 'SOP' ? tutorTabId() : undefined,
         }),
       }, session.csrf_token)
-      if (!controller.signal.aborted) setHits(response.results)
+      if (!controller.signal.aborted) {
+        setHits(response.results)
+        setTutorReceipt(response.tutor_receipt ?? undefined)
+        setKeywordSearch(response.search_mode === 'keyword')
+      }
     } catch (failure) {
       if (!controller.signal.aborted) setError(errorMessage(failure))
     } finally {
@@ -403,6 +414,7 @@ function Knowledge({ base, ticketId, session, readOnly = false, initialQuery = '
       <button disabled={pending} data-companion-anchor="search-sop">{pending ? '검색 중…' : '검색'}</button>
     </form>
     {pending && <p role="status">검색 중입니다.</p>}
+    {keywordSearch && <p className="meta">Gemini 임베딩 연결이 지연되어 기존 자료에서 키워드로 검색했어요.</p>}
     {hits && (hits.length ? <><p role="status">검색 후보 {hits.length}건입니다. 판단에 사용하기 전에 실제 증상과 출처를 비교하세요.</p>
       <ul className="training-materials">{hits.map((hit, index) => (<li key={`${hit.source_id}-${index}`}>
       <a href={trainingSourceHref(hit.source_url)}>{hit.title}</a>

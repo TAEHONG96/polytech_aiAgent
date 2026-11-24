@@ -3,7 +3,7 @@ import type { CompanionCommand, CompanionPosition, CompanionState } from './comp
 import { clampPosition, distance, flightStep, nearbyDestination, throwMotion, walkDuration, walkPosition } from './companion-movement'
 import type { MovementArea, Wall } from './companion-movement'
 import { hintWaitMs } from './companion-hints'
-import type { ActiveCompanionHint, CompanionHint } from './companion-hints'
+import type { ActiveCompanionHint, CompanionHint, TutorCommand, TutorFeedback, TutorHintResult, TutorPreference } from './companion-hints'
 
 const behavior = {
   idleMin: 8_000,
@@ -33,22 +33,28 @@ export type CompanionView = {
   paused: boolean
   preview: CompanionState | null
   chatOpen: boolean
+  tutorEnabled: boolean
+  tutorFrequency: TutorPreference
 }
 
 export const initialCompanionView: CompanionView = {
   state: 'idle', direction: 'right', interaction: null, hidden: false, paused: false, preview: null, chatOpen: false,
+  tutorEnabled: true, tutorFrequency: 'normal',
 }
 
-type SavedCompanion = Pick<CompanionView, 'direction' | 'hidden' | 'paused'> & {
+type Preferences = Pick<CompanionView, 'hidden' | 'paused' | 'tutorEnabled' | 'tutorFrequency'>
+type SavedCompanion = Preferences & Pick<CompanionView, 'direction'> & {
   position: CompanionPosition
   anchor: CompanionPosition
 }
 
-function savedPreferences(saved: Partial<SavedCompanion>): Pick<SavedCompanion, 'direction' | 'hidden' | 'paused'> {
+function savedPreferences(saved: Partial<SavedCompanion>): Preferences & Pick<SavedCompanion, 'direction'> {
   return {
     direction: saved.direction === 'left' ? 'left' : 'right',
     hidden: saved.hidden === true,
     paused: saved.paused === true,
+    tutorEnabled: saved.tutorEnabled !== false,
+    tutorFrequency: saved.tutorFrequency === 'low' || saved.tutorFrequency === 'high' ? saved.tutorFrequency : 'normal',
   }
 }
 
@@ -75,10 +81,11 @@ type Walk = {
 
 type Flight = { velocity: CompanionPosition; elapsed: number; lastFrame: number }
 
-export function createCompanionController({ readArea, render, place }: {
+export function createCompanionController({ readArea, render, place, tutorFeedback }: {
   readArea: () => MovementArea
   render: (view: CompanionView) => void
   place: (position: CompanionPosition, size: number) => void
+  tutorFeedback?: (offerId: string, event: TutorFeedback) => void
 }) {
   const motion = window.matchMedia(reducedMotionQuery)
   const saved = restore()
@@ -104,6 +111,7 @@ export function createCompanionController({ readArea, render, place }: {
     try {
       sessionStorage.setItem(storageKey, JSON.stringify({
         position, anchor, direction: view.direction, hidden: view.hidden, paused: view.paused,
+        tutorEnabled: view.tutorEnabled, tutorFrequency: view.tutorFrequency,
       } satisfies SavedCompanion))
     } catch {
       // The current page can still use the companion when storage is blocked.
@@ -241,7 +249,7 @@ export function createCompanionController({ readArea, render, place }: {
     if (disposed || document.hidden || view.hidden) return
     const now = performance.now()
     if (reactionEndsAt !== undefined && now >= reactionEndsAt) {
-      if (view.activeHint) dismissHint()
+      if (view.activeHint) dismissHint('EXPIRED')
       else enter(view.chatOpen ? 'chatting' : 'idle')
       return
     }
@@ -283,7 +291,7 @@ export function createCompanionController({ readArea, render, place }: {
     if (document.hidden) cancelFrame()
     else {
       if (flight) flight.lastFrame = performance.now()
-      if (view.activeHint?.mode === 'ready' && hintExpired()) dismissHint()
+      if (view.activeHint?.mode === 'ready' && hintExpired()) dismissHint('EXPIRED')
     }
     requestFrame()
     schedule()
@@ -372,17 +380,21 @@ export function createCompanionController({ readArea, render, place }: {
 
   function offerHint(hint: CompanionHint) {
     if (view.hidden || view.paused || view.chatOpen || view.interaction || view.preview || document.hidden) return false
-    if (view.activeHint?.mode === 'ready' && hintExpired()) dismissHint()
+    if (view.activeHint?.mode === 'ready' && hintExpired()) dismissHint('EXPIRED')
     const active = view.activeHint
-    if (active && (active.mode === 'open' || active.hint.priority >= hint.priority)) return false
+    if (hint.tutor && (active || !view.tutorEnabled)) return false
+    if (active && (active.mode !== 'ready' || active.hint.priority >= hint.priority)) return false
+    if (active?.hint.tutor) dismissHint()
     interruptTravel()
     update({ activeHint: { hint, mode: 'ready' } })
     enter('hint', hintWaitMs)
     return true
   }
 
-  function dismissHint() {
-    if (!view.activeHint) return
+  function dismissHint(reason: TutorFeedback | 'TRANSFER' = 'INVALIDATED') {
+    const active = view.activeHint
+    if (!active) return
+    if (active.hint.tutor && reason !== 'TRANSFER') tutorFeedback?.(active.hint.tutor.offerId, reason)
     update({ activeHint: undefined })
     enter('idle')
   }
@@ -393,13 +405,33 @@ export function createCompanionController({ readArea, render, place }: {
     if (!active) {
       command({ type: 'chat' })
     } else if (active.mode === 'ready') {
-      if (hintExpired()) dismissHint()
+      if (hintExpired()) dismissHint('EXPIRED')
       else {
         recordActivity()
-        update({ activeHint: { ...active, mode: 'open' } })
-        enter('hint')
+        if (active.hint.tutor) beginTutorRequest('view')
+        else {
+          update({ activeHint: { ...active, mode: 'open' } })
+          enter('hint')
+        }
       }
     }
+  }
+
+  function beginTutorRequest(command: TutorCommand) {
+    const active = view.activeHint
+    const tutor = active?.hint.tutor
+    if (!tutor || active.mode === 'loading') return
+    const request = command === 'retry' && tutor.retryTransport && tutor.request ? tutor.request : { id: crypto.randomUUID(), command }
+    update({ activeHint: { mode: 'loading', hint: { ...active.hint, tutor: { ...tutor, request, retryTransport: false } } } })
+    enter('thinking')
+  }
+
+  function finishTutorRequest(requestId: string, result: TutorHintResult, retryTransport = false) {
+    const active = view.activeHint
+    const tutor = active?.hint.tutor
+    if (!tutor || active.mode !== 'loading' || tutor.request?.id !== requestId) return
+    update({ activeHint: { mode: 'open', hint: { ...active.hint, tutor: { ...tutor, result, retryTransport } } } })
+    enter('hint')
   }
 
   function command(action: CompanionCommand) {
@@ -415,7 +447,7 @@ export function createCompanionController({ readArea, render, place }: {
         break
       case 'chat':
         if (!view.chatOpen) enter('chatting', reactionDuration.chatting)
-        window.dispatchEvent(new CustomEvent(companionChatRequestedEvent, { detail: { hintId: action.hintId } }))
+        window.dispatchEvent(new CustomEvent(companionChatRequestedEvent, { detail: action }))
         break
       case 'state':
         if (action.state === 'walking') {
@@ -445,9 +477,10 @@ export function createCompanionController({ readArea, render, place }: {
     enter(state ?? 'idle')
   }
 
-  function setPreferences(preferences: Partial<Pick<CompanionView, 'hidden' | 'paused'>>) {
+  function setPreferences(preferences: Partial<Preferences>) {
     update(preferences)
     if (view.hidden || view.paused) dismissHint()
+    if (!view.tutorEnabled && view.activeHint?.hint.tutor) dismissHint()
     if (view.hidden) {
       hovered = false
       interruptTravel()
@@ -464,11 +497,16 @@ export function createCompanionController({ readArea, render, place }: {
     schedule()
   }
 
+  function leavePage() {
+    if (view.activeHint?.hint.tutor && view.activeHint.mode === 'ready') dismissHint('INVALIDATED')
+    save()
+  }
+
   document.addEventListener('visibilitychange', syncVisibility)
   window.addEventListener('pointerdown', recordActivity, { capture: true, passive: true })
   window.addEventListener('keydown', recordActivity, { capture: true, passive: true })
   window.addEventListener('wheel', recordActivity, { capture: true, passive: true })
-  window.addEventListener('pagehide', save)
+  window.addEventListener('pagehide', leavePage)
   window.addEventListener('pageshow', restorePage)
   motion.addEventListener('change', syncMotion)
   setPosition(position)
@@ -478,7 +516,7 @@ export function createCompanionController({ readArea, render, place }: {
 
   return {
     syncArea, setHovered, beginPointer, dragTo, endPointer, command, preview, setPreferences,
-    offerHint, dismissHint, activate, setChatPhase, getActiveHint: () => view.activeHint,
+    offerHint, dismissHint, activate, beginTutorRequest, finishTutorRequest, setChatPhase, getActiveHint: () => view.activeHint,
     dispose() {
       disposed = true
       stopTravel()
@@ -487,7 +525,7 @@ export function createCompanionController({ readArea, render, place }: {
       window.removeEventListener('pointerdown', recordActivity, true)
       window.removeEventListener('keydown', recordActivity, true)
       window.removeEventListener('wheel', recordActivity, true)
-      window.removeEventListener('pagehide', save)
+      window.removeEventListener('pagehide', leavePage)
       window.removeEventListener('pageshow', restorePage)
       motion.removeEventListener('change', syncMotion)
     },

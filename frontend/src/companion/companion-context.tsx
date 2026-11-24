@@ -9,7 +9,7 @@ type ContextParts = {
   run: { phase: ResourcePhase; status?: SimulationStatus; scenario?: string }
   tickets: { phase: ResourcePhase }
   ticket: { phase: ResourcePhase; id?: string; number?: string; status?: Status; severity?: Severity; kind?: string; origin?: string }
-  search: { phase: ResourcePhase; kind: 'sop' | 'case'; request: number }
+  search: { phase: ResourcePhase; kind: 'sop' | 'case'; request: number; tutorReceipt?: string }
   analysis: { phase: ResourcePhase; id?: string }
   incoming: { phase: ResourcePhase }
   work: { editing: boolean }
@@ -36,6 +36,20 @@ export type CompanionPageContext = {
   entity?: { type: 'ticket' | 'sop' | 'incident' | 'handover'; id: string }
   section?: Section
   resources: Partial<ContextParts>
+}
+
+export type PageInput = { page_id: string; run_id?: string; ticket_id?: string; section?: string; sop_id?: string;
+  incident_id?: string; handover_revision?: number; analysis_id?: string; search_state?: string }
+
+export function requestContext(context?: CompanionPageContext): PageInput {
+  return {
+    page_id: context?.pageId ?? 'home', section: context?.section, run_id: context?.runId, ticket_id: context?.ticketId,
+    sop_id: context?.entity?.type === 'sop' ? context.entity.id : undefined,
+    incident_id: context?.entity?.type === 'incident' ? context.entity.id : undefined,
+    handover_revision: context?.entity?.type === 'handover' ? Number(context.entity.id) : undefined,
+    analysis_id: context?.resources.analysis?.phase === 'ready' ? context.resources.analysis.id : undefined,
+    search_state: context?.resources.search?.phase,
+  }
 }
 
 const runPath = /^\/simulation-runs\/([\da-f-]{36})(?=\/|$)/i

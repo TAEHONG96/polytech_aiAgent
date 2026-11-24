@@ -1,11 +1,13 @@
 import atexit
 import os
+import re
+import unicodedata
 from dataclasses import dataclass
 from threading import Lock
 from uuid import UUID
 
 import httpx2
-from sqlalchemy import func, literal, or_, select, union_all
+from sqlalchemy import case, func, literal, or_, select, union_all
 from sqlalchemy.orm import Session
 
 from app.http import ApiError
@@ -59,17 +61,37 @@ def worker_query_vector(query: str, profile: str) -> list[float]:
         )
         if response.status_code == 429:
             raise ApiError(429, "EMBEDDING_RATE_LIMIT", "임베딩 호출 한도를 초과했습니다.")
+        if response.status_code == 409:
+            raise ApiError(503, "EMBEDDING_CONFIG", "API와 워커의 검색 임베딩 설정이 일치하지 않습니다.")
+        if response.status_code == 503:
+            try:
+                detail = response.json().get("detail")
+            except (ValueError, AttributeError):
+                detail = None
+            if detail in ("EMBEDDING_CONFIG", "EMBEDDING_INVALID"):
+                raise ApiError(503, detail, "검색 임베딩 설정 또는 반환값을 확인해 주세요.")
         response.raise_for_status()
         payload = response.json()
         if payload.get("profile") != profile:
-            raise ValueError("Embedding profile mismatch")
+            raise ApiError(503, "EMBEDDING_CONFIG", "API와 워커의 검색 임베딩 설정이 일치하지 않습니다.")
         return checked_vector(payload.get("vector"))
-    except (httpx2.HTTPError, ValueError, TypeError, AttributeError, EmbeddingFailure) as exc:
+    except (ValueError, TypeError, AttributeError, EmbeddingFailure) as exc:
+        raise ApiError(503, "EMBEDDING_INVALID", "워커의 검색 임베딩 반환값을 확인해 주세요.") from exc
+    except httpx2.HTTPError as exc:
         raise ApiError(503, "EMBEDDING_UNAVAILABLE", "검색용 임베딩을 생성할 수 없습니다.") from exc
 
 
 def calibrated_min_score(profile: str) -> float | None:
     return 0.62 if profile == GEMINI_SEARCH_PROFILE else None
+
+
+def keyword_distance(terms: list[str], title, content):
+    title = func.lower(func.coalesce(title, ""))
+    content = func.lower(content)
+    # Prefer a keyword in the title while still finding procedure-specific terms in the indexed snippet.
+    rank = sum(case((func.strpos(title, term) > 0, 1.0),
+                    (func.strpos(content, term) > 0, 0.6), else_=0.0) for term in terms)
+    return 1.0 - rank / len(terms)
 
 
 def incident_scope(ticket: Ticket):
@@ -82,9 +104,10 @@ def incident_scope(ticket: Ticket):
 
 
 def search_index(
-    db: Session, *, vector: list[float], profile: str, source_types: list[SourceType], limit: int,
+    db: Session, *, vector: list[float] | None, profile: str, source_types: list[SourceType], limit: int,
     min_score: float | None = None, run_id: UUID | None = None, target: Ticket | None = None,
     exclude_ticket_id: UUID | None = None,
+    keyword_query: str | None = None,
 ) -> list[SearchResult]:
     if target is not None and (run_id is None or target.simulation_run_id != run_id):
         raise ValueError("Search target must belong to the scoped run")
@@ -94,7 +117,16 @@ def search_index(
     ticket_scope = Ticket.simulation_run_id == run_id
     if exclude_ticket_id is not None:
         ticket_scope = ticket_scope & (Ticket.id != exclude_ticket_id)
-    distance = KnowledgeChunk.embedding.cosine_distance(vector)
+    if vector is None:
+        if run_id is None or keyword_query is None:
+            raise ValueError("Keyword fallback requires a scoped training run")
+        query = unicodedata.normalize("NFKC", keyword_query).lower()
+        terms = list(dict.fromkeys(term for term in re.findall(r"[\w]+", query) if len(term.strip("_")) >= 2))[:10]
+        if not terms:
+            return []
+        distance = keyword_distance(terms, func.coalesce(SopDocument.title, Ticket.title), KnowledgeChunk.content)
+    else:
+        distance = KnowledgeChunk.embedding.cosine_distance(vector)
     statement = (
         select(
             IndexJob.source_type, KnowledgeChunk.source_id, SopDocument.title.label("sop_title"),
@@ -124,16 +156,20 @@ def search_index(
     if run_id is not None:
         statement = statement.where(IndexJob.indexed_profile == profile)
     if target is not None and SourceType.INCIDENT in source_types:
+        incident_distance = (ScenarioIncident.embedding.cosine_distance(vector) if vector is not None else
+                             keyword_distance(terms, ScenarioIncident.title, ScenarioIncident.resolution))
         incidents = select(
             literal(SourceType.INCIDENT.value), ScenarioIncident.id, ScenarioIncident.title, literal(None),
             ScenarioIncident.resolution, literal(0), literal(None), literal(None), literal(None),
-            ScenarioIncident.embedding.cosine_distance(vector), literal(1),
+            incident_distance, literal(1),
         ).where(*incident_scope(target), ScenarioIncident.embedding_profile == profile)
         statement = union_all(statement, incidents)
     statement = statement.subquery()
     results = []
     ranked_sources = select(statement).where(statement.c.source_rank == 1)
-    if min_score is not None:
+    if vector is None:
+        ranked_sources = ranked_sources.where(statement.c.distance < 1)
+    elif min_score is not None:
         ranked_sources = ranked_sources.where(statement.c.distance <= 1 - min_score)
     ranked_sources = ranked_sources.order_by(statement.c.distance, statement.c.source_id).limit(limit)
     for row in db.execute(ranked_sources):

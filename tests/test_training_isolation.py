@@ -16,7 +16,9 @@ from app.agent.provider import FakeGenerator
 from app.agent.queue import process_agent_run
 from app.agent.tools import Toolbox
 from app.db import engine
+from app.http import ApiError
 from app.knowledge import routes as knowledge
+from app.knowledge.embedding import EmbeddingFailure, EmbeddingProfile
 from app.knowledge.models import IndexJob, KnowledgeChunk, SopDocument
 from app.models import Ticket, TicketEvent
 from app.settings import settings
@@ -183,9 +185,11 @@ def test_sql_candidates_and_originals_are_authorized_before_limit(trainees, data
     (alice, headers, a, alice_id), (bob, _, b, _) = trainees
     ta, tb = first_ticket(alice, a), first_ticket(bob, b)
     profile = f"qa-training-{uuid4().hex}"
+    gemini = EmbeddingProfile(provider="gemini", model="synthetic", fingerprint=profile)
+    keyword = f"synthetic{uuid4().hex}"
     high, lower = [1.0, 0.0] + [0.0] * 766, [0.8, 0.6] + [0.0] * 766
     monkeypatch.setattr(knowledge, "worker_query_vector", lambda query, embedding_profile: high)
-    monkeypatch.setattr(knowledge, "embedding_profile", lambda: SimpleNamespace(fingerprint=profile))
+    monkeypatch.setattr(knowledge, "embedding_profile", lambda: gemini)
     with TestClient(app) as operator:
         op = logged_in(operator, USER, PASSWORD, "operator")
         sops = []
@@ -200,7 +204,7 @@ def test_sql_candidates_and_originals_are_authorized_before_limit(trainees, data
             db.get(SopDocument, uid).training_approved = uid == sops[1]
             job = db.get(IndexJob, uid)
             job.status, job.indexed_profile = "COMPLETED", profile
-            db.add(KnowledgeChunk(source_id=uid, chunk_index=0, content="synthetic SOP", embedding=embedding,
+            db.add(KnowledgeChunk(source_id=uid, chunk_index=0, content=f"{keyword} SOP", embedding=embedding,
                                   embedding_model="fake", embedding_profile=profile, created_at=now))
         for row, vector in ((ta, lower), (tb, high)):
             uid = UUID(row["id"])
@@ -209,7 +213,7 @@ def test_sql_candidates_and_originals_are_authorized_before_limit(trainees, data
             db.add(IndexJob(id=uid, source_type="TICKET", ticket_id=uid, ticket_version=ticket.version,
                             status="COMPLETED", attempts=0, available_at=now, updated_at=now, indexed_profile=profile))
             db.flush()
-            db.add(KnowledgeChunk(source_id=uid, chunk_index=0, content="synthetic case", embedding=vector,
+            db.add(KnowledgeChunk(source_id=uid, chunk_index=0, content=f"{keyword} case", embedding=vector,
                                   embedding_model="fake", embedding_profile=profile, created_at=now))
         target = db.get(Ticket, UUID(ta["id"]))
         incidents = [uuid4() for _ in range(4)]
@@ -217,17 +221,20 @@ def test_sql_candidates_and_originals_are_authorized_before_limit(trainees, data
                                                (lower, high, high, high), strict=True):
             db.add(ScenarioIncident(id=uid, scenario_id=target.scenario_id, scenario_host_id=target.scenario_host_id,
                                     occurred_at=target.detected_at + timedelta(seconds=delta), approved=approved,
-                                    title="합성 사고", resolution="합성 이력", embedding=vector, embedding_profile=profile))
+                                    title="합성 사고", resolution=f"{keyword} 이력", embedding=vector,
+                                    embedding_profile=profile))
 
-    def search(source, ticket_id=None, status=200):
-        payload = {"query": "synthetic ranking", "source_types": [source], "limit": 1}
+    def search(source, ticket_id=None, status=200, query=keyword, limit=1):
+        payload = {"query": query, "source_types": [source], "limit": limit}
         if ticket_id is not None:
             payload["ticket_id"] = ticket_id
         return request(alice, "POST", a + "/knowledge/search", status, headers=headers, json=payload).json()
 
     for source, target_id, expected in (("SOP", None, sops[1]), ("TICKET", None, ta["id"]),
                                          ("INCIDENT", ta["id"], incidents[0])):
-        hit, = search(source, target_id)["results"]
+        result = search(source, target_id)
+        assert result["search_mode"] == "semantic"
+        hit, = result["results"]
         assert hit["source_id"] == str(expected)
         request(alice, "GET", hit["source_url"], 200)
         request(bob, "GET", hit["source_url"], 404)
@@ -242,6 +249,43 @@ def test_sql_candidates_and_originals_are_authorized_before_limit(trainees, data
     outcome = asyncio.run(Toolbox(alice_id, UUID(tb["id"]), run_id=UUID(a.rsplit("/", 1)[1]))
                           .execute("get_ticket_details", {"ticket_id": tb["id"]}))
     assert outcome.status == "rejected" and "untrusted_data" not in outcome.payload
+
+    def worker_unavailable(query, embedding_profile):
+        raise ApiError(503, "EMBEDDING_UNAVAILABLE", "synthetic outage")
+
+    def provider_unavailable(query):
+        raise EmbeddingFailure("EMBEDDING_UNAVAILABLE", "synthetic outage", retryable=True)
+
+    with monkeypatch.context() as outage:
+        outage.setattr(knowledge, "worker_query_vector", worker_unavailable)
+        for source, target_id, expected in (("SOP", None, sops[1]), ("TICKET", None, ta["id"]),
+                                             ("INCIDENT", ta["id"], incidents[0])):
+            result = search(source, target_id, limit=10)
+            assert result["search_mode"] == "keyword"
+            hit, = result["results"]
+            assert hit["source_id"] == str(expected)
+        assert search("SOP", query=f"unknown{uuid4().hex}")["results"] == []
+        search("INCIDENT", tb["id"], status=404)
+        provider = SimpleNamespace(profile=gemini, query=provider_unavailable)
+        toolbox = Toolbox(alice_id, UUID(ta["id"]), run_id=UUID(a.rsplit("/", 1)[1]), provider=provider)
+        outcome = asyncio.run(toolbox.execute("search_sop", {"query": keyword, "limit": 3}))
+        assert outcome.status == "ok", outcome.details
+        assert toolbox.used_keyword_search
+        assert outcome.payload["search_mode"] == "keyword"
+        assert [source.source_id for source in toolbox.evidence.values()] == [sops[1]]
+        with TestClient(app) as operator:
+            op = logged_in(operator, USER, PASSWORD, "operator")
+            result = request(operator, "POST", "/api/v1/knowledge/search", 503, headers=op,
+                             json={"query": keyword, "source_types": ["SOP"]})
+            assert result.json()["error"]["code"] == "EMBEDDING_UNAVAILABLE"
+
+    def worker_misconfigured(query, embedding_profile):
+        raise ApiError(503, "EMBEDDING_CONFIG", "synthetic configuration error")
+
+    with monkeypatch.context() as misconfigured:
+        misconfigured.setattr(knowledge, "worker_query_vector", worker_misconfigured)
+        assert search("SOP", status=503)["error"]["code"] == "EMBEDDING_CONFIG"
+
     with Session(data_owner) as db, db.begin():
         stored = AgentRun(id=uuid4(), requested_by=alice_id, simulation_run_id=UUID(a.rsplit("/", 1)[1]),
                           ticket_id=UUID(ta["id"]), message="synthetic", status="succeeded", created_at=now,

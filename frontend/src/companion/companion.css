@@ -119,10 +119,34 @@
   overflow-wrap: anywhere;
 }
 
-.companion-hint p { margin: 0 0 .45rem; max-height: 45vh; overflow-y: auto; }
-.companion-hint button { pointer-events: auto; }
+.companion-hint p { margin: 0 0 .45rem; }
+.companion-hint-text {
+  max-height: 45vh;
+  overflow-y: auto;
+  overscroll-behavior-y: contain;
+}
+.companion-hint :is(.companion-hint-text, button, a) { pointer-events: auto; }
 .companion-hint-actions { display: flex; flex-wrap: wrap; gap: .4rem; }
-.companion-hint-ready { position: absolute; width: 1px; height: 1px; overflow: hidden; clip-path: inset(50%); }
+.companion-hint-ready {
+  position: absolute;
+  inset: auto 0 0;
+  width: max-content;
+  max-width: 100%;
+  margin-inline: auto;
+  padding: .15rem .4rem;
+  border: 1px solid #b7c5d4;
+  border-radius: .35rem;
+  background: #fff;
+  color: #33465a;
+  font-size: .7rem;
+  font-weight: 600;
+  text-align: center;
+}
+.companion-pet[data-adaptive-hint=ready] + .companion-hint-ready {
+  border-color: #2b66b6;
+  background: #e0edff;
+  color: #173e70;
+}
 .companion-pet[data-hint=ready]::after {
   content: '';
   position: absolute;

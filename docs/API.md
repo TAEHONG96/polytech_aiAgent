@@ -86,7 +86,9 @@
 
 질의는 1–1,000자, `limit`은 1–20이다. 기본값은 두 출처 유형과 5건이다. 결과의 `source_id`는 원본 UUID다. `source_url`은 SOP 상세 또는 티켓 상세 웹 경로다. PDF는 `page_number`, Markdown은 `section`, 티켓은 `ticket_version`을 제공한다. `chunk_index`는 0부터 센다.
 
-각 항목은 `source_type`, `source_id`, `title`, `content`, `score`, `chunk_index`, `page_number`, `section`, `ticket_version`, `source_url`을 반환한다. 점수는 `1 - cosine_distance`이다. 같은 임베딩 프로필에서 공급자가 색인한 청크를 정확 코사인 거리로 비교하고, 원본별 최고 순위 청크 하나를 반환한다. 점수가 높을수록 두 벡터가 가깝다. 현재 Gemini 검색 프로필에는 가상 자료 평가에서 검증한 최소 점수 0.62를 적용한다. 조건을 충족하는 출처가 없으면 빈 배열이다. worker 또는 임베딩 오류는 503, Gemini 호출 한도는 429를 반환한다.
+각 항목은 `source_type`, `source_id`, `title`, `content`, `score`, `chunk_index`, `page_number`, `section`, `ticket_version`, `source_url`을 반환한다. `search_mode: "semantic"`일 때 점수는 `1 - cosine_distance`이다. 같은 임베딩 프로필에서 공급자가 색인한 청크를 정확 코사인 거리로 비교하고, 원본별 최고 순위 청크 하나를 반환한다. 점수가 높을수록 두 벡터가 가깝다. 현재 Gemini 검색 프로필에는 가상 자료 평가에서 검증한 최소 점수 0.62를 적용한다. 조건을 충족하는 출처가 없으면 빈 배열이다. 운영 검색에서 worker 또는 임베딩 오류는 503, Gemini 호출 한도는 429를 반환한다.
+
+교육 세션의 `POST /api/v1/simulation-runs/{run_id}/knowledge/search`는 Gemini 검색 임베딩이 일시적으로 사용 불가하면 기존 색인의 제목과 본문을 키워드로 검색한다. 이때 `search_mode`는 `"keyword"`이며, 점수는 제목에 가중치를 준 일치 키워드 비율이다. 교육 승인 SOP, 세션 내 티켓, 티켓에 허용된 과거 장애의 접근 범위를 적용한다. 설정 오류나 호출 한도 초과는 각각 오류 응답으로 반환한다. 컴패니언 생성 응답에도 키워드 검색을 사용한 경우 `search_mode: "keyword"`가 포함된다.
 
 ## 장애 분석
 
@@ -157,6 +159,13 @@ UI 단계는 기존 액션 승인·피드백 API를 사용한다. 워크플로�
 복합 워크플로의 `goal_requirements`는 요청 목표를 실행 단계와 연결하며, 각 단계는 검증한 결과를 `result`에 기록한다. `workflow.outcome`은 수행된 작업, 참고 근거, 미완료 작업을 담는다. SOP 비교 응답의 `sop_comparison`은 검색으로 확인한 후보, 문서별 관련성·적용 범위·한계와 선택적 추천을 반환한다. 비교 후 열기를 요청한 경우 `workflow.input_kind`가 `sop_selection`인 동안 같은 액션 엔드포인트에 `decision: "select"`와 `sop_id`를 먼저 보내고, 선택된 ID에 대해 별도로 승인한다.
 
 발신 인계 이동 피드백은 현재 실습의 `workspace` 및 `outgoing` 섹션을 확인한다. 다음 설명 단계는 갱신된 컨텍스트로 워커 큐에서 이어서 처리한다. 강조가 필요하면 등록된 `outgoing-handover` 제안을 별도로 승인한다. 브라우저는 승인된 라우트 전환으로 기존 뷰를 닫을 때 `/actions/invalidate`에 `transition_proposal_id`를 보낸다. 이 값은 진행 중인 승인 이동 제안과 일치할 때만 적용된다.
+
+### 키로 맞춤 힌트
+
+- `POST /companion/tutor/offers`는 `tab_id`, 실습 티켓의 `page_context`, `frequency`, `active_seconds`, 최근 행동 최대 40건을 받는다. 양쪽에서 확인한 개입 조건을 충족하면 제안을 기록하고 ID·규칙·점수·임계값을 반환한다. 조건이 부족하거나 작업이 진행 중이면 `null`을 반환한다. 이 요청의 판단은 규칙으로 수행된다.
+- 코퍼스의 티켓별 SOP 검색은 선택적 `tutor_tab_id`를 받아 결과 수와 시각이 서명된 `tutor_receipt`를 반환한다. 이 영수증은 사용자, 로그인, 탭, 실습, 티켓에 묶이며 검색어를 포함하지 않는다. 분석·워크플로 참조와 SOP는 서버에서 소유권 및 대상을 확인한다.
+- `POST /companion/tutor/{offer_id}/hints`는 `page_context`, `tab_id`, `request_id`와 `command`를 받는다. `view`는 제안 열람, `more`는 성공한 힌트의 다음 단계, `retry`는 재시도 가능한 실패의 수동 재시도다. 동일한 요청 ID는 이전 생성 작업을 반환한다. `GET /companion/tutor/{offer_id}/hints/{hint_id}?tab_id=…`에서 결과·근거·실행 모드·호출 수를 조회한다.
+- `POST /companion/tutor/{offer_id}/feedback`의 `event`는 `EXPIRED`, `DISMISSED`, `INVALIDATED` 중 하나다. 힌트에서 이어진 채팅은 `tutor_offer_id`와 `tutor_tab_id`를 함께 보내며, 사용자가 SOP 검색을 명시한 경우 기존 워크플로와 승인을 적용한다.
 
 ## 인수인계
 
