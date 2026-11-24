@@ -24,6 +24,7 @@ from app.tickets import ticket_by_id
 from app.http import ApiError
 
 logger = logging.getLogger(__name__)
+chat_logger = logging.getLogger("uvicorn.error.companion")
 ACTIVE_RUNS = (RunStatus.QUEUED, RunStatus.RUNNING)
 
 
@@ -160,8 +161,10 @@ def process_agent_run(model_factory=generator) -> bool:
         return False
 
     usage = Usage()
+    started = time.monotonic()
     result = None
     failure = None
+    model = None
     answered_from_records = False
     try:
         with Session(engine()) as db:
@@ -183,7 +186,8 @@ def process_agent_run(model_factory=generator) -> bool:
             result = answer_ticket_status(work)
             answered_from_records = result is not None
         if not answered_from_records:
-            model = model_factory()
+            model = (generator(default_provider="gemini")
+                     if work.companion is not None and model_factory is generator else model_factory())
             with Session(engine()) as db, db.begin():
                 run = owned_run(db, work)
                 run.provider = model.provider
@@ -215,6 +219,11 @@ def process_agent_run(model_factory=generator) -> bool:
                 run.finished_at = utcnow()
                 run.lease_token = None
                 run.lease_expires_at = None
+        if work.companion is not None:
+            chat_logger.info("companion_chat run=%s provider=%s status=%s elapsed_ms=%d model_attempts=%d embedding_requests=%d code=%s",
+                             work.id, model.provider if model else "workflow" if answered_from_records else "unavailable",
+                             "failed" if failure else "succeeded", round((time.monotonic() - started) * 1000),
+                             usage.model_requests, usage.embedding_requests, failure.code if failure else "ok")
     except RunLost:
         pass
     return True

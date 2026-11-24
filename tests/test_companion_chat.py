@@ -5,9 +5,10 @@ from uuid import uuid4
 import pytest
 from google.genai import types
 
-from app.agent.provider import FakeGenerator, reply
+from app.agent.provider import AnalysisFailure, FakeGenerator, reply
 from app.agent.queue import process_agent_run
 from app.companion import service
+from app.companion.intents import Intent, classify, needs_sop
 from app.companion.schemas import PageContext
 from app.companion.ticket_status import status_question
 from app.settings import settings
@@ -22,6 +23,20 @@ def body(run, ticket, *, conversation=None, message="현재 장애에서 무엇�
     return {"conversation_id": conversation or str(uuid4()), "request_id": str(uuid4()), "message": message,
             "page_context": {"page_id": "ticket", "run_id": run.rsplit("/", 1)[1], "ticket_id": ticket["id"]},
             "active_hint_id": "TICKET_SELECTED"}
+
+
+@pytest.mark.parametrize(("message", "intent", "search"), [
+    ("지금 보고 있는 티켓이 무슨 작업이야?", Intent.TICKET_SUMMARY, False),
+    ("이 티켓에서는 무엇부터 확인해야 해?", Intent.TROUBLESHOOTING, True),
+    ("이 장애와 관련된 SOP를 찾아줘.", Intent.SOP_LOOKUP, True),
+    ("POST와 BMC의 차이점은 무엇이야?", Intent.GENERAL_QUESTION, False),
+    ("그다음에는 무엇을 확인해야 해?", Intent.FOLLOW_UP, True),
+    ("그럼 더 자세히 설명해 줘", Intent.FOLLOW_UP, False),
+    ("SOP가 뭐야?", Intent.GENERAL_QUESTION, False),
+])
+def test_chat_intent_and_search_policy(message, intent, search):
+    assert classify(message) == intent
+    assert needs_sop(intent, message, None) is search
 
 
 @pytest.mark.parametrize(("message", "expected"), [
@@ -103,6 +118,7 @@ def test_chat_scope_multiturn_idempotency_and_reset(trainees, monkeypatch):
         async def generate(self, contents, config):
             data = json.loads(contents[0].parts[0].text)
             assert not config.tools
+            assert config.response_schema is None and config.response_json_schema["additionalProperties"] is False
             assert "신뢰할 수 없는 참고 데이터" in config.system_instruction
             payloads.append(data)
             return await super().generate(contents, config)
@@ -132,7 +148,7 @@ def test_chat_scope_multiturn_idempotency_and_reset(trainees, monkeypatch):
     assert alice.post(BASE, headers=auth, json=followup).status_code == 202
     assert process_agent_run(Capture)
     assert payloads[1]["current_context"]["ticket_id"] is None
-    assert payloads[1]["hint_topic"] is None and payloads[1]["retrieval"] == "not_scoped"
+    assert payloads[1]["hint_topic"] is None and payloads[1]["retrieval"] == "not_required"
     assert payloads[1]["history"][0]["ticket_id"] == ticket["id"]
     assert len(alice.get(url).json()["turns"]) == 2
     assert bob.delete(url, headers=bob_auth).status_code == 204
@@ -161,3 +177,43 @@ def test_chat_rejects_fabricated_citation_and_limits_calls(trainees, monkeypatch
         assert failed["answer"] is None and failed["sources"] == []
     command["request_id"] = str(uuid4())
     assert alice.post(BASE, headers=auth, json=command).status_code == 429
+
+
+@POSTGRES
+def test_chat_gemini_errors_do_not_fall_back_and_explicit_mock_is_labelled(trainees, monkeypatch):
+    monkeypatch.setattr(service, "settings", lambda: replace(settings(), corpus_training=True))
+    (alice, auth, run, _), _ = trainees
+    command = body(run, first_ticket(alice, run), message="POST와 BMC의 차이점은 무엇이야?")
+    url = f"{BASE}/{command['conversation_id']}"
+
+    def queue():
+        command["request_id"] = str(uuid4())
+        assert alice.post(BASE, headers=auth, json=command).status_code == 202
+
+    monkeypatch.delenv("GEMINI_API_KEY", raising=False)
+    monkeypatch.delenv("AGENT_PROVIDER", raising=False)
+    queue()
+    assert process_agent_run()
+    result = alice.get(url).json()["turns"][-1]
+    assert result["execution_mode"] == "error" and result["answer"] is None
+    assert result["error"]["code"] == "AI_CONFIGURATION"
+
+    class ProviderError(FakeGenerator):
+        provider = "gemini"
+
+        async def generate(self, contents, config):
+            raise AnalysisFailure("AI_CONFIGURATION", "Gemini 설정 확인")
+
+    queue()
+    assert process_agent_run(ProviderError)
+    result = alice.get(url).json()["turns"][-1]
+    assert result["execution_mode"] == "error" and result["answer"] is None
+    assert result["provider"] == "gemini"
+
+    monkeypatch.setenv("AGENT_PROVIDER", "fake")
+    queue()
+    assert process_agent_run()
+    result = alice.get(url).json()["turns"][-1]
+    assert result["execution_mode"] == "mock" and result["provider"] == "fake"
+    assert result["intent"] == "GENERAL_QUESTION" and result["retrieval"] == "not_required"
+    assert result["sources"] == []

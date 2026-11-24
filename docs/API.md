@@ -130,7 +130,7 @@
 
 `page_context`는 화면에 따라 `sop_id`, `incident_id`, `handover_revision`, `analysis_id`, `search_state`를 함께 받을 수 있다. `home`과 `about`은 실습 식별자가 없는 화면이다. `active_hint_id`는 선택값이며 허용된 화면의 힌트 유형만 적용한다. 메시지는 최대 2,000자다.
 
-각 응답 항목은 `message_id`, `conversation_id`, `request_id`, `message`, `context_info`, `timestamp`, `status`를 제공한다. `status`는 `queued`, `running`, `succeeded`, `failed` 중 하나다. 완료 항목에는 안전하게 표시 가능한 Markdown `answer`, 검증된 `sources`, `provider`, 승인 SOP 검색 상태 `retrieval`(`found`, `empty`, `unavailable`, `not_scoped`, `not_required`)이 포함된다. 티켓 상태 규칙이나 변경 이력으로 직접 답하면 `provider`는 `workflow`이고 `retrieval`은 `not_required`다. 실패 항목의 `error`는 `code`, `message`, `retryable`로 구성된다. UI는 `GET`으로 상태를 조회하며 응답 스트리밍은 사용하지 않는다.
+각 응답 항목은 `message_id`, `conversation_id`, `request_id`, `message`, `context_info`, `timestamp`, `status`를 제공한다. `status`는 `queued`, `running`, `succeeded`, `failed` 중 하나다. 모델을 사용한 완료 항목에는 Markdown `answer`, 검증된 `sources`, `provider`, `model`, `intent`, 승인 SOP 검색 상태 `retrieval`(`found`, `empty`, `unavailable`, `not_scoped`, `not_required`)이 포함된다. `execution_mode`는 실행 중에는 `null`이고, 완료 시 `gemini`, `mock`, `workflow`, 실패 시 `error`다. `workflow`는 티켓 상태의 업무 규칙이나 변경 기록으로 직접 답한 경우다. 실패 항목의 `error`는 `code`, `message`, `retryable`로 구성된다. UI는 `GET`으로 상태를 조회하며 응답 스트리밍은 사용하지 않는다.
 
 같은 대화에서 동일한 `request_id`와 요청 내용으로 재전송하면 기존 결과를 받는다. 같은 ID에 다른 내용을 보내면 `409 CHAT_REQUEST_CONFLICT`다. 진행 중인 질문·분석이 있으면 `409 AGENT_BUSY`, 분당 여덟 건을 초과하면 `429 CHAT_RATE_LIMIT`을 반환한다. 대화 보관 기간은 8시간이다.
 

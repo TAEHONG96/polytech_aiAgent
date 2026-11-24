@@ -54,11 +54,23 @@ corpus run --rm --no-deps -T test python -m pytest -q tests/test_corpus_actions.
 기본 코퍼스는 Fake 공급자를 사용하며 키로 패널에 **모의 응답**을 표시한다. 실제 호출은 Gemini 접근 권한이 있는 별도의 합성 코퍼스에서 확인한다. Fake로 합성 문서 적재를 완료한 뒤 같은 스택의 마지막 Compose 파일로 `compose.corpus-gemini.yaml`을 추가한다. `GEMINI_API_KEY`를 실행 환경에서 제공하면 Compose는 키를 워커에만 전달한다.
 
 ```bash
+read -rsp 'Gemini API key ' GEMINI_API_KEY
+printf '\n'
+export GEMINI_API_KEY
 corpus -f compose.corpus-gemini.yaml up -d --build --wait nginx worker
 corpus -f compose.corpus-gemini.yaml exec -T worker python -m app.knowledge.demo --reindex
 ```
 
-색인 재생성이 끝나면 합성 티켓의 키로 채팅으로 질문하고 `provider`가 `gemini`인지, 근거 링크가 해당 실습의 승인 SOP로 연결되는지 확인한다. Fake와 Gemini의 임베딩 검색 프로필은 다르다. Fake로 전환할 때도 전환한 공급자로 색인을 다시 생성한다.
+`GEMINI_API_KEY`는 위처럼 실행 환경에서 제공하거나 Git에서 제외된 `.env`에 설정해 `--env-file .env`로 읽을 수 있다. 환경 파일을 사용한다면 적재 시점과 같은 DB 계정·비밀번호를 유지하고, 셸에 빈 `GEMINI_API_KEY`가 남아 있으면 먼저 해제한다. 모델은 워커의 `GEMINI_GENERATION_MODEL`(기본 `gemini-3.8-flash`)과 `GEMINI_EMBEDDING_MODEL`(기본 `gemini-embedding-2`) 설정을 따른다. Gemini 오버레이를 사용하는데 키가 비어 있으면 Compose가 설정 단계에서 종료한다. 인증·모델·호출 오류는 채팅의 오류 항목으로 표시한다. Fake와 Gemini의 임베딩 검색 프로필은 다르므로 전환한 공급자로 색인을 다시 생성한다.
+
+색인이 완료되면 PowerShell에서 실제 Gemini에 대한 A~E 브라우저 스모크를 실행할 수 있다. 별도 합성 코퍼스의 실제 포트를 `QA_BASE_URL`로 지정한다. 스모크는 합성 교육생을 생성해 티켓 요약, 티켓 전환, 승인 SOP 링크, 일반 개념, 후속 질문을 확인한다.
+
+```powershell
+$env:QA_BASE_URL = 'http://127.0.0.1:18089'
+$env:QA_GEMINI_SMOKE = '1'
+Set-Location frontend
+npm run test:e2e -- companion-gemini.spec.ts
+```
 
 ## Cloudflare Tunnel에서 공개 실습 가입
 

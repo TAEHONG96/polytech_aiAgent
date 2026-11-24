@@ -15,7 +15,8 @@ type Body = { conversation_id: string; request_id: string; page_context: PageInp
 type Turn = { message_id: string; request_id: string; status: 'queued' | 'running' | 'succeeded' | 'failed';
   message: string; answer?: string; context_info: PageInput & { label: string }; active_hint_id?: string;
   sources: { key: string; title: string; source_url: string; section?: string }[];
-  provider?: string; retrieval?: 'found' | 'empty' | 'unavailable' | 'not_scoped' | 'not_required'; error?: { message: string; retryable: boolean } }
+  execution_mode?: 'gemini' | 'mock' | 'workflow' | 'error'; provider?: string;
+  retrieval?: 'found' | 'empty' | 'unavailable' | 'not_scoped' | 'not_required'; error?: { message: string; retryable: boolean } }
 type Saved = { id: string; open: boolean; receipt?: { id: string; at: number } }
 
 const noContext = () => undefined
@@ -218,8 +219,9 @@ export function CompanionChat({ session, hidden, setPhase, returnFocus }: {
         <p className="meta">{turn.context_info.label}{turn.active_hint_id && ' · 힌트 질문'}</p>
         <p className="companion-chat-question">{turn.message}</p>
         {turn.answer && <div className="companion-chat-answer"><Answer text={turn.answer} />
-          {turn.provider === 'fake' && <p className="meta">모의 응답</p>}
-          {turn.provider === 'workflow' && <p className="meta">실습 업무 규칙·기록 기반</p>}
+          {(turn.execution_mode === 'mock' || turn.provider === 'fake') && <p className="meta">모의 응답</p>}
+          {(turn.execution_mode === 'gemini' || turn.provider === 'gemini') && <p className="meta">Gemini 응답</p>}
+          {(turn.execution_mode === 'workflow' || turn.provider === 'workflow') && <p className="meta">실습 업무 규칙·기록 기반</p>}
           {turn.retrieval === 'empty' && <p className="meta">관련 승인 SOP 검색 결과가 없습니다.</p>}
           {turn.retrieval === 'unavailable' && <p className="meta">승인 SOP 검색을 완료하지 못했습니다.</p>}
           {!!turn.sources.length && <ul aria-label="근거 출처">{turn.sources.filter(source => sourcePath.test(source.source_url)).map(source => (

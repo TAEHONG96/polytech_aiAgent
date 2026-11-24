@@ -123,11 +123,11 @@ class FakeGenerator:
         return None
 
 
-def generator():
-    provider = os.environ.get("AGENT_PROVIDER", "fake")
+def generator(*, default_provider: str = "fake"):
+    provider = os.environ.get("AGENT_PROVIDER", default_provider)
     if provider == "fake":
         return FakeGenerator()
-    key = os.environ.get("GEMINI_API_KEY")
+    key = os.environ.get("GEMINI_API_KEY", "").strip()
     if provider != "gemini" or not key:
         raise AnalysisFailure("AI_CONFIGURATION", "워커의 Gemini 공급자와 API 키 설정을 확인하세요.")
     return GeminiGenerator(key)

@@ -61,12 +61,18 @@ def turn_view(db, run: AgentRun):
         info = {"page_id": context.page_id, "label": PAGE_LABELS[context.page_id]}
         status, result = RunStatus.FAILED, {}
         error = {"code": "CHAT_CONTEXT_UNAVAILABLE", "message": "이 질문의 업무 데이터 또는 출처에 접근할 수 없습니다.", "retryable": False}
+    mode = None
+    if status == RunStatus.FAILED:
+        mode = "error"
+    elif status == RunStatus.SUCCEEDED:
+        mode = {"fake": "mock", "gemini": "gemini", "workflow": "workflow"}.get(run.provider)
     return {"conversation_id": run.companion["conversation_id"], "message_id": run.id,
             "request_id": run.companion["request_id"], "message": run.message,
             "active_hint_id": run.companion.get("active_hint_id"), "status": status,
             "context_info": info, "timestamp": run.created_at,
             "answer": result.get("answer"), "sources": result.get("sources", []),
-            "retrieval": result.get("retrieval"), "error": error, "provider": run.provider}
+            "retrieval": result.get("retrieval"), "intent": result.get("intent"), "error": error,
+            "provider": run.provider, "model": run.model, "execution_mode": mode}
 
 
 @router.post("", status_code=202)
