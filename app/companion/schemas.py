@@ -42,8 +42,53 @@ class ChatInput(StrictInput):
     message: Annotated[str, StringConstraints(strip_whitespace=True, min_length=1, max_length=MAX_MESSAGE)]
     page_context: PageContext = Field(default_factory=PageContext)
     active_hint_id: Hint | None = None
+    action_view_id: UUID | None = None
+
+
+ActionType = Literal["navigate_to_page", "open_sop", "highlight_element", "focus_input"]
+RouteId = Literal["practice_home", "workspace", "ticket_list", "outgoing_handover", "sop_library"]
+AnchorId = Literal["search-sop", "ticket-search", "sop-query"]
+
+
+class ActionDraft(StrictInput):
+    type: ActionType
+    route_id: RouteId | None = None
+    anchor_id: AnchorId | None = None
+    sop_key: Annotated[str, StringConstraints(pattern=r"^(?:K[0-9]{1,3}|PAGE_SOP)$")] | None = None
+
+    @model_validator(mode="after")
+    def check_arguments(self):
+        fields = {"navigate_to_page": "route_id", "open_sop": "sop_key",
+                  "highlight_element": "anchor_id", "focus_input": "anchor_id"}
+        if {name for name in ("route_id", "anchor_id", "sop_key") if getattr(self, name) is not None} != {fields[self.type]}:
+            raise ValueError("Invalid action arguments")
+        return self
 
 
 class ChatDraft(StrictInput):
     answer: Annotated[str, StringConstraints(strip_whitespace=True, min_length=1, max_length=3500)]
     citation_keys: Annotated[list[str], Field(max_length=5)]
+    action_proposal: ActionDraft | None = None
+
+
+class ActionView(StrictInput):
+    view_id: UUID
+
+
+class ActionDecision(ActionView):
+    proposal_id: UUID
+    decision: Literal["approve", "cancel"]
+    page_context: PageContext
+    sop_id: UUID | None = None
+
+
+class ActionFeedback(ActionView):
+    proposal_id: UUID
+    outcome: Literal["succeeded", "failed"]
+    error_code: Literal["target_unavailable", "context_changed", "navigation_failed"] | None = None
+
+    @model_validator(mode="after")
+    def check_outcome(self):
+        if (self.outcome == "failed") != (self.error_code is not None):
+            raise ValueError("Invalid feedback outcome")
+        return self

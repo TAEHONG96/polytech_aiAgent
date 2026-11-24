@@ -275,3 +275,17 @@
     transform: none;
   }
 }
+
+.companion-action-card {
+  margin-top: .55rem;
+  padding: .65rem;
+  border: 1px solid #c9dbf9;
+  border-radius: .5rem;
+  background: #f3f7ff;
+}
+
+.companion-action-card fieldset { margin: .35rem 0; padding: .35rem .5rem; border: 1px solid #c9dbf9; }
+.companion-action-card label { display: flex; align-items: start; gap: .4rem; margin: .3rem 0; }
+.companion-action-card input[type="radio"] { width: auto; margin: .2rem 0 0; }
+.companion-action-card-buttons { display: flex; flex-wrap: wrap; justify-content: end; gap: .35rem; }
+.companion-action-highlight { outline: 3px solid #2b63c9; outline-offset: 5px; }

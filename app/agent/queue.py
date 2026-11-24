@@ -182,8 +182,8 @@ def process_agent_run(model_factory=generator) -> bool:
             elif work.companion is None and work.simulation_run_id is not None and work.ticket_id is None:
                 raise PermissionError("Invalid training analysis scope")
         if work.companion is not None:
-            from app.companion.service import answer_ticket_status
-            result = answer_ticket_status(work)
+            from app.companion.service import answer_without_model
+            result = answer_without_model(work)
             answered_from_records = result is not None
         if not answered_from_records:
             model = (generator(default_provider="gemini")

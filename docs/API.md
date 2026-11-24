@@ -134,6 +134,18 @@
 
 같은 대화에서 동일한 `request_id`와 요청 내용으로 재전송하면 기존 결과를 받는다. 같은 ID에 다른 내용을 보내면 `409 CHAT_REQUEST_CONFLICT`다. 진행 중인 질문·분석이 있으면 `409 AGENT_BUSY`, 분당 여덟 건을 초과하면 `429 CHAT_RATE_LIMIT`을 반환한다. 대화 보관 기간은 8시간이다.
 
+### 키로 실행 제안
+
+새 채팅 질문에는 현재 열린 화면을 나타내는 `action_view_id` UUID를 선택적으로 포함할 수 있다. 워커는 질문이 실행 의도이고 모델 제안이 허용 범위에 맞으면 응답에 `action_proposal`을 추가한다. 제안에는 `id`, `view_id`, `type`, `label`, `context`, `expires_at`, `status`와 유형별 `route_id`, `anchor_id` 또는 승인 SOP `options`가 있다. 제안 유효기간은 2분이다.
+
+| 메서드와 경로 | 계약 |
+| --- | --- |
+| `POST /companion/chat/{conversation_id}/actions/{message_id}` | `proposal_id`, `view_id`, `decision`(`approve` 또는 `cancel`), 현재 `page_context`. SOP 열기를 승인할 때는 후보에서 선택한 `sop_id`를 보낸다. `200` `{status, command}`에서 승인 시에만 실행 인자를 받는다. |
+| `POST /companion/chat/{conversation_id}/actions/invalidate` | `view_id`를 보낸다. 페이지·티켓 이동 또는 채팅을 닫았을 때 해당 화면에서 작성한 제안을 무효화한다. `204`. |
+| `POST /companion/chat/{conversation_id}/actions/{message_id}/feedback` | `proposal_id`, `view_id`, `outcome`(`succeeded` 또는 `failed`), 실패 시 `error_code`. 브라우저가 확인한 실행 결과를 기록한다. `204`. |
+
+해당 API는 교육생 세션과 기존 변경 요청 검사를 사용한다. 다른 소유자·로그인 세션의 제안은 `404 ACTION_NOT_FOUND`, 만료·취소·이미 사용된 제안과 화면 불일치는 `409 ACTION_STALE`이다. SOP 후보에 없는 ID는 `409 ACTION_TARGET_INVALID`, 승인 철회된 문서는 `404`를 반환한다. 제안과 결과는 대화 보관 기간 안에서 확인할 수 있다.
+
 ## 인수인계
 
 | 메서드와 경로 | 요청·응답 | 권한·조건 |

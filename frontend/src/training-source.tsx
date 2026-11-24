@@ -70,6 +70,7 @@ export function TrainingSource({ path }: { path: string }) {
   const [error, setError] = useState('')
   const incident = path.includes('/incident-sources/')
   const section = incident ? '호스트 과거 장애 · 읽기 전용' : path.includes('/sops/') ? '승인 SOP' : '확정 인계 리비전'
+  const sopId = source && path.includes('/sops/') ? path.split('/').at(-1) : undefined
   useCompanionPart('source', { phase: error ? 'error' : source ? 'ready' : 'loading' })
   useEffect(() => {
     const controller = new AbortController()
@@ -82,7 +83,7 @@ export function TrainingSource({ path }: { path: string }) {
       {source?.original_url && <a href={base + '/sops'}>SOP 목록</a>}
       {incident && <a href={path.split('/incident-sources/')[0] + '#incidents'}>현재 티켓의 과거 장애 목록</a>}
       <a href={base + '#evaluation'}>실습 결과</a></nav>
-    <article className="surface">
+    <article className="surface" data-companion-destination={sopId ? 'sop' : undefined} data-companion-source-id={sopId}>
       <p className="training-context">{section}</p>
       <h1>{source?.title ?? (source?.revision ? `인계 리비전 ${source.revision}` : '실습 근거')}</h1>
       {error && <p className="notice" role="alert">{error}</p>}

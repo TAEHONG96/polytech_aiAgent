@@ -72,6 +72,8 @@ Set-Location frontend
 npm run test:e2e -- companion-gemini.spec.ts
 ```
 
+키로 실행 제안과 승인 흐름도 기존 합성 코퍼스에서 검증할 수 있다. Gemini 환경에서는 `QA_ACTION_SMOKE=gemini`, Fake 환경에서는 `QA_ACTION_SMOKE=mock`을 설정하고 해당 환경의 루프백 주소를 `QA_BASE_URL`에 넣는다. `frontend`에서 `npm run test:e2e -- companion-actions.spec.ts`를 실행한다. 이 검증은 기존 승인 SOP와 검색 색인을 사용한다.
+
 ## Cloudflare Tunnel에서 공개 실습 가입
 
 [공개 터널 설정](PUBLIC_DEMO.md)을 따라 실습 전용 환경 파일 `.env.corpus-public`을 만든다. 기존 코퍼스 볼륨을 재사용하려면 처음 적재할 때 사용한 DB 계정·비밀번호를 같은 파일에 설정한다. `APP_ORIGIN`에는 공개 HTTPS 주소를 넣고 `CORPUS_NGINX_TARGET=training-tunnel`, `APP_PUBLIC_TRAINING_REGISTRATION=1`을 지정한다. 앞 절의 `corpus stop`으로 루프백 구성을 정지한 다음 같은 Compose 프로젝트를 아래 조합으로 시작한다.

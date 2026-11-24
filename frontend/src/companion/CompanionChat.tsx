@@ -1,4 +1,4 @@
-import { useEffect, useLayoutEffect, useRef, useState, useSyncExternalStore } from 'react'
+import { useEffect, useLayoutEffect, useMemo, useRef, useState, useSyncExternalStore } from 'react'
 import type { FormEvent } from 'react'
 import { api, errorMessage } from '../api'
 import type { Session } from '../api'
@@ -7,15 +7,19 @@ import { companionAsset } from './companion-assets'
 import { useCompanionContextStore } from './companion-context'
 import type { CompanionPageContext } from './companion-context'
 import { companionChatRequestedEvent } from './companion-events'
+import { CompanionActionCard } from './CompanionActionCard'
+import { actionLocation, executeCompanionAction } from './companion-actions'
+import type { ActionFailure, Proposal } from './companion-actions'
 
 type Phase = 'chatting' | 'thinking' | 'happy' | 'surprised' | null
 type PageInput = { page_id: string; run_id?: string; ticket_id?: string; section?: string; sop_id?: string;
   incident_id?: string; handover_revision?: number; analysis_id?: string; search_state?: string }
-type Body = { conversation_id: string; request_id: string; page_context: PageInput; message: string; active_hint_id?: string }
+type Body = { conversation_id: string; request_id: string; page_context: PageInput; message: string; active_hint_id?: string; action_view_id?: string }
 type Turn = { message_id: string; request_id: string; status: 'queued' | 'running' | 'succeeded' | 'failed';
   message: string; answer?: string; context_info: PageInput & { label: string }; active_hint_id?: string;
   sources: { key: string; title: string; source_url: string; section?: string }[];
   execution_mode?: 'gemini' | 'mock' | 'workflow' | 'error'; provider?: string;
+  action_proposal?: Proposal | null;
   retrieval?: 'found' | 'empty' | 'unavailable' | 'not_scoped' | 'not_required'; error?: { message: string; retryable: boolean } }
 type Saved = { id: string; open: boolean; receipt?: { id: string; at: number } }
 
@@ -85,6 +89,11 @@ export function CompanionChat({ session, hidden, setPhase, returnFocus }: {
   const [loadError, setLoadError] = useState('')
   const [refresh, setRefresh] = useState(0)
   const [resetting, setResetting] = useState(false)
+  const [runningAction, setRunningAction] = useState<string>()
+  const [actionReaction, setActionReaction] = useState<'happy' | 'surprised'>()
+  const [actionClock, setActionClock] = useState(Date.now)
+  const [browserLocation, setBrowserLocation] = useState(actionLocation)
+  const [viewEpoch, advanceView] = useState(0)
   const [instruction, setInstruction] = useState<{ id: string; path: string; section?: string }>()
   const textarea = useRef<HTMLTextAreaElement>(null)
   const list = useRef<HTMLDivElement>(null)
@@ -97,6 +106,47 @@ export function CompanionChat({ session, hidden, setPhase, returnFocus }: {
   const relatedHint = instruction?.path === context?.pathname && instruction?.section === context?.section ? instruction?.id : undefined
   const visible = saved.open && !hidden
   const waiting = !!sending || !!saved.receipt || turns.some(isWaiting)
+  const actionView = useMemo(() => ({ id: crypto.randomUUID(), location: browserLocation }),
+    [visible, saved.id, browserLocation, context?.pathname, context?.section, viewEpoch])
+  const activeView = useRef<string>(undefined)
+  const usedView = useRef<string>(undefined)
+  const actionLock = useRef(false)
+
+  useEffect(() => {
+    const sync = () => setBrowserLocation(actionLocation())
+    const restore = (event: PageTransitionEvent) => { if (event.persisted) advanceView(value => value + 1) }
+    window.addEventListener('hashchange', sync)
+    window.addEventListener('popstate', sync)
+    window.addEventListener('pageshow', restore)
+    return () => {
+      window.removeEventListener('hashchange', sync)
+      window.removeEventListener('popstate', sync)
+      window.removeEventListener('pageshow', restore)
+    }
+  }, [])
+
+  useLayoutEffect(() => {
+    if (!visible) return
+    activeView.current = actionView.id
+    const invalidate = () => {
+      if (activeView.current === actionView.id) activeView.current = undefined
+      if (usedView.current !== actionView.id) return
+      usedView.current = undefined
+      void api(`${base}/${saved.id}/actions/invalidate`, { method: 'POST', keepalive: true,
+        body: JSON.stringify({ view_id: actionView.id }) }, session.csrf_token).catch(() => {})
+    }
+    window.addEventListener('pagehide', invalidate)
+    return () => { window.removeEventListener('pagehide', invalidate); invalidate() }
+  }, [visible, actionView, saved.id, session.csrf_token])
+
+  useEffect(() => {
+    if (!visible) return
+    const pending = turns.flatMap(turn => turn.action_proposal?.status === 'pending' && turn.action_proposal.view_id === actionView.id
+      ? [Date.parse(turn.action_proposal.expires_at)] : []).filter(expires => expires > actionClock)
+    if (!pending.length) return
+    const timer = window.setTimeout(() => setActionClock(Date.now()), Math.max(1, Math.min(...pending) - Date.now() + 10))
+    return () => window.clearTimeout(timer)
+  }, [visible, turns, actionView, actionClock])
 
   useEffect(() => { live.current = true; return () => { live.current = false } }, [])
   useLayoutEffect(() => {
@@ -143,14 +193,17 @@ export function CompanionChat({ session, hidden, setPhase, returnFocus }: {
     if (visible) {
       const justFinished = last && last.message_id === previous.current?.id
         && (previous.current.status === 'queued' || previous.current.status === 'running') && !isWaiting(last)
-      phase = waiting ? 'thinking' : justFinished ? (last.status === 'succeeded' ? 'happy' : 'surprised') : 'chatting'
+      phase = waiting || runningAction ? 'thinking'
+        : actionReaction ?? (justFinished && !last.action_proposal ? (last.status === 'succeeded' ? 'happy' : 'surprised') : 'chatting')
     }
     if (last) previous.current = { id: last.message_id, status: last.status }
     setPhase(phase)
-  }, [visible, waiting, last?.message_id, last?.status, setPhase])
+  }, [visible, waiting, runningAction, actionReaction, last?.message_id, last?.status, setPhase])
 
   async function send(body: Body, snapshotLabel: string) {
     follow.current = true
+    setActionReaction(undefined)
+    if (body.action_view_id === activeView.current) usedView.current = body.action_view_id
     setSending({ body, label: snapshotLabel })
     setError('')
     setRetry(undefined)
@@ -170,14 +223,55 @@ export function CompanionChat({ session, hidden, setPhase, returnFocus }: {
 
   function submit(event: FormEvent) {
     event.preventDefault()
-    if (!message.trim() || waiting || resetting) return
+    if (!message.trim() || waiting || resetting || actionLock.current) return
     const current = contextStore?.getCurrentPageContext()
     const validHint = instruction?.path === current?.pathname && instruction?.section === current?.section ? instruction?.id : undefined
     const body = { conversation_id: saved.id, request_id: crypto.randomUUID(), page_context: requestContext(current),
-      message: message.trim(), active_hint_id: validHint }
+      message: message.trim(), active_hint_id: validHint, action_view_id: actionView.id }
     setMessage('')
     setInstruction(undefined)
     void send(body, label)
+  }
+
+  async function decideAction(turn: Turn, proposal: Proposal, decision: 'approve' | 'cancel', selected?: string) {
+    if (actionLock.current || waiting || resetting || !canDecide(proposal)) return
+    actionLock.current = true
+    setRunningAction(proposal.id)
+    setActionReaction(undefined)
+    setError('')
+    const endpoint = `${base}/${saved.id}/actions/${turn.message_id}`
+    const identity = { proposal_id: proposal.id, view_id: proposal.view_id }
+    const update = (status: Proposal['status'], error_code?: ActionFailure) => setTurns(current => current.map(item =>
+      item.message_id === turn.message_id ? { ...item, action_proposal: { ...proposal, status, error_code } } : item))
+    try {
+      const response = await api<{ status: 'approved' | 'cancelled'; command: unknown }>(endpoint, { method: 'POST',
+        body: JSON.stringify({ ...identity, decision, sop_id: selected, page_context: requestContext(contextStore?.getCurrentPageContext()) }) }, session.csrf_token)
+      update(response.status)
+      if (response.status === 'approved') {
+        let failure: ActionFailure | undefined = 'context_changed'
+        if (activeView.current === proposal.view_id) {
+          try { failure = await executeCompanionAction(response.command, actionView.location, proposal, selected) }
+          catch { failure = 'target_unavailable' }
+        }
+        const outcome = failure ? 'failed' : 'succeeded'
+        update(outcome, failure)
+        setActionReaction(failure ? 'surprised' : 'happy')
+        await api(`${endpoint}/feedback`, { method: 'POST', keepalive: true,
+          body: JSON.stringify({ ...identity, outcome, error_code: failure }) }, session.csrf_token)
+      }
+    } catch (failure) {
+      setError(errorMessage(failure))
+      setActionReaction('surprised')
+    } finally {
+      actionLock.current = false
+      setRunningAction(undefined)
+      setRefresh(value => value + 1)
+    }
+  }
+
+  function canDecide(proposal: Proposal) {
+    return proposal.view_id === actionView.id && actionView.location === actionLocation()
+      && proposal.status === 'pending' && Date.parse(proposal.expires_at) > Math.max(Date.now(), actionClock)
   }
 
   async function reset() {
@@ -197,6 +291,7 @@ export function CompanionChat({ session, hidden, setPhase, returnFocus }: {
   }
 
   function close() {
+    activeView.current = undefined
     setSaved(value => ({ ...value, open: false }))
     returnFocus()
   }
@@ -224,10 +319,13 @@ export function CompanionChat({ session, hidden, setPhase, returnFocus }: {
           {(turn.execution_mode === 'workflow' || turn.provider === 'workflow') && <p className="meta">실습 업무 규칙·기록 기반</p>}
           {turn.retrieval === 'empty' && <p className="meta">관련 승인 SOP 검색 결과가 없습니다.</p>}
           {turn.retrieval === 'unavailable' && <p className="meta">승인 SOP 검색을 완료하지 못했습니다.</p>}
-          {!!turn.sources.length && <ul aria-label="근거 출처">{turn.sources.filter(source => sourcePath.test(source.source_url)).map(source => (
+          {!!turn.sources.length && turn.action_proposal?.type !== 'open_sop' && <ul aria-label="근거 출처">{turn.sources.filter(source => sourcePath.test(source.source_url)).map(source => (
             <li key={source.key}><a href={trainingSourceHref(source.source_url)}>{source.title}{source.section && ` · ${source.section}`}</a></li>
           ))}</ul>}
         </div>}
+        {turn.action_proposal && <CompanionActionCard key={turn.action_proposal.id} proposal={turn.action_proposal}
+          active={canDecide(turn.action_proposal)} busy={!!runningAction || waiting || resetting}
+          decide={(decision, selected) => void decideAction(turn, turn.action_proposal!, decision, selected)} />}
         {turn.error && <p className="notice" role="alert">{turn.error.message}{turn.error.retryable && !waiting && <button type="button" className="secondary"
           onClick={() => {
             const { label: snapshot, ...page_context } = turn.context_info
@@ -251,8 +349,8 @@ export function CompanionChat({ session, hidden, setPhase, returnFocus }: {
             event.preventDefault(); event.currentTarget.form?.requestSubmit()
           }
         }} /></label>
-      <div><button type="button" className="secondary" disabled={!!sending || resetting || (!turns.length && !retry)} onClick={() => void reset()}>대화 초기화</button>
-        <button type="submit" disabled={waiting || resetting || !message.trim()}>전송</button></div>
+      <div><button type="button" className="secondary" disabled={!!sending || !!runningAction || resetting || (!turns.length && !retry)} onClick={() => void reset()}>대화 초기화</button>
+        <button type="submit" disabled={waiting || !!runningAction || resetting || !message.trim()}>전송</button></div>
       </form>
     </div>
   </section>

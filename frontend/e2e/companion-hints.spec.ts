@@ -228,12 +228,14 @@ test('읽는 중에는 높은 우선순위 이벤트가 덮어쓰지 않고 정�
 })
 
 test('걷는 도중 힌트를 준비하고 누른 사이 만료되면 채팅으로 이어지지 않는다', async ({ page }) => {
-  await page.addInitScript(() => { Math.random = () => 0.6 })
   await page.clock.install()
   await page.goto('/about')
   await expect(pet(page)).toBeVisible()
   await page.clock.pauseAt(new Date(await page.evaluate(() => Date.now() + 300)))
-  await page.clock.runFor(12_900)
+  const initial = (await pet(page).boundingBox())!
+  await page.evaluate(({ x, y }) => window.dispatchEvent(new CustomEvent('dco:companion-command', {
+    detail: { type: 'move', position: { x: x - 100, y } },
+  })), initial)
   await expect(pet(page)).toHaveAttribute('data-state', 'walking')
   const chatEvents = await page.evaluateHandle(() => {
     const state = { count: 0 }

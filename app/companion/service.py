@@ -1,6 +1,6 @@
 import asyncio
 import time
-from datetime import timedelta
+from datetime import datetime, timedelta, timezone
 from uuid import UUID
 
 from google.genai import types
@@ -13,6 +13,7 @@ from app.agent.models import AgentRun
 from app.agent.provider import AnalysisFailure, reply
 from app.agent.schemas import Evidence, RunStatus, clean_text
 from app.agent.tools import Toolbox
+from app.companion.actions import INVALID_TEXT, SECTIONS, create_proposal, plan_request
 from app.companion.intents import SIMILAR, Intent, classify, needs_sop
 from app.companion.schemas import ChatDraft, PageContext
 from app.companion.ticket_status import explain_current_status, explain_status, status_question
@@ -48,6 +49,9 @@ FOLLOW_UP은 질문 의도와 연결되는 이전 답변을 참고하고 현재 
 대화로 설명만 합니다. 명령 실행이나 업무 데이터 변경을 수행했다고 주장하지 마세요.
 필요한 형식으로 Markdown을 작성하세요. 링크 URL은 쓰지 말고, 실제로 근거로 사용한 제공 키만 citation_keys에 넣으세요.
 지정된 JSON 스키마를 따르세요.
+allowed_action이 있을 때만 해당 유형의 action_proposal을 제안하세요. route_id와 anchor_id는 제공된 허용값을 그대로 사용하세요.
+open_sop는 제공된 evidence 중 실제 승인 SOP의 키를 sop_key로 제안하세요. 찾은 SOP가 없으면 action_proposal은 null입니다.
+여러 SOP는 사용자가 선택한다고 안내하세요. 승인 전에 이동, 검색창 포커스 또는 강조를 실행했다고 말하지 마세요.
 """
 
 
@@ -170,20 +174,27 @@ def verified_history(db: Session, work, current: PageContext, now) -> list[dict]
     return history
 
 
-def answer_ticket_status(work) -> dict | None:
+def answer_without_model(work) -> dict | None:
     context = PageContext.model_validate(work.companion["page_context"])
+    plan = plan_request(work.message, context)
+    direct = {
+        "unsupported": "키로가 제안할 수 있는 동작은 실습 화면 이동, 승인 SOP 열기, 화면 강조와 검색창 포커스입니다.",
+        "unavailable": INVALID_TEXT,
+        "explain_section": SECTIONS.get(plan.get("section_id")) if plan else None,
+    }.get(plan["type"] if plan else "")
     question = status_question(work.message, context)
-    if question is None:
+    if not direct and (question is None or plan):
         return None
 
-    kind, statuses = question
     with Session(engine()) as db:
         check_chat_requester(db, work.requested_by)
         info, _, _ = scoped_context(db, work.requested_by, context)
-        if kind == "history":
+        if direct:
+            answer, source = direct, None
+        elif question[0] == "history":
             answer, source = explain_current_status(db, context, work.message)
         else:
-            answer, source = explain_status(kind, statuses), None
+            answer, source = explain_status(*question), None
     return {"answer": answer, "context_info": info, "retrieval": "not_required",
             "sources": [source.model_dump(mode="json", exclude={"content"})] if source else [],
             "validation_sources": [source.model_dump(mode="json", include={"kind", "source_id", "source_url"})] if source else []}
@@ -191,7 +202,8 @@ def answer_ticket_status(work) -> dict | None:
 
 async def answer_chat(work, model, usage, *, seconds, now) -> dict:
     context = PageContext.model_validate(work.companion["page_context"])
-    intent = classify(work.message)
+    plan = plan_request(work.message, context) if work.companion.get("action_view_id") else None
+    intent = Intent.SOP_LOOKUP if plan and plan["type"] == "open_sop" else classify(work.message)
     budget = Budget(time.monotonic() + seconds, usage)
     with Session(engine()) as db:
         check_chat_requester(db, work.requested_by)
@@ -199,7 +211,9 @@ async def answer_chat(work, model, usage, *, seconds, now) -> dict:
         history = verified_history(db, work, context, now)
 
     previous = history[-1] if history else {}
-    search = needs_sop(intent, work.message, previous.get("intent") if previous.get("ticket_id") == info["ticket_id"] else None)
+    search = plan["type"] == "open_sop" if plan else needs_sop(
+        intent, work.message, previous.get("intent") if previous.get("ticket_id") == info["ticket_id"] else None,
+    )
     search_state = "not_scoped" if search else "not_required"
     sources = [page_sop] if search and page_sop else []
     if search and context.run_id:
@@ -239,7 +253,7 @@ async def answer_chat(work, model, usage, *, seconds, now) -> dict:
     payload = {"purpose": "companion_chat", "intent": intent, "message": clean_text(work.message, 2000), "current_context": info,
                "verified": facts if intent != Intent.GENERAL_QUESTION else [],
                "history": history if intent != Intent.GENERAL_QUESTION else [], "retrieval": search_state,
-               "hint_topic": work.companion.get("active_hint_id"),
+               "hint_topic": work.companion.get("active_hint_id"), "allowed_action": plan,
                "evidence": [source.model_dump(mode="json") for source in sources]}
     response = await budget.invoke(model, [user_content(payload)], types.GenerateContentConfig(
         system_instruction=POLICY, response_mime_type="application/json",
@@ -253,7 +267,13 @@ async def answer_chat(work, model, usage, *, seconds, now) -> dict:
             cited = sources
     except (ValidationError, KeyError) as exc:
         raise AnalysisFailure("AI_INVALID_OUTPUT", "키로의 답변과 출처를 검증하지 못했습니다.", retryable=True) from exc
-    return {"answer": clean_text(output.answer, 3500), "sources": [source.model_dump(mode="json", exclude={"content"})
+    proposal = create_proposal(output.action_proposal, plan, sources, context, work.companion.get("action_view_id"),
+                               datetime.now(timezone.utc))
+    answer = output.answer
+    if proposal:
+        answer = "아래 제안을 확인해 주세요." if proposal["type"] != "open_sop" else "관련 승인 SOP를 찾았어요. 열 문서를 아래에서 선택해 주세요."
+    return {"answer": clean_text(answer, 3500), "action_proposal": proposal,
+            "sources": [source.model_dump(mode="json", exclude={"content"})
                                                                 for source in cited], "retrieval": search_state, "intent": intent,
             "context_info": info, "validation_sources": [
                 source.model_dump(mode="json", include={"kind", "source_id", "source_url"}) for source in sources
@@ -266,7 +286,15 @@ def fake_response(payload):
     sop = next((source for source in sources if source["kind"] == "SOP"), None)
     intent = payload["intent"]
     ticket = next((fact["ticket"] for fact in payload["verified"] if "ticket" in fact), None)
-    if intent == Intent.GENERAL_QUESTION:
+    plan = payload.get("allowed_action")
+    proposal = None
+    if plan and plan["type"] != "open_sop":
+        proposal = plan
+        answer = "실행할 동작을 확인해 주세요."
+    elif plan and sop:
+        proposal = {**plan, "sop_key": sop["key"]}
+        answer = "관련 승인 SOP를 찾았습니다."
+    elif intent == Intent.GENERAL_QUESTION:
         answer = "일반 기술 설명은 Gemini 응답 모드에서 생성됩니다."
     elif intent == Intent.TICKET_SUMMARY:
         answer = (f"**{ticket['title']}**\n\n{ticket['description']}\n\n다음 작업 · {ticket['next_action'] or '기록 없음'}"
@@ -276,4 +304,5 @@ def fake_response(payload):
         guidance = f"**승인 SOP** {sop['title']}에서 관측과 비교할 항목을 찾으세요." if sop else "확인된 SOP 근거가 없습니다. 관측한 장애 증상을 알려 주세요."
         followup = "\n\n앞서 나눈 질문도 참고합니다." if payload["history"] else ""
         answer = f"{lead}\n\n{guidance}{followup}"
-    return reply(types.Part(text=ChatDraft(answer=answer, citation_keys=[sop["key"]] if sop else []).model_dump_json()))
+    return reply(types.Part(text=ChatDraft(answer=answer, citation_keys=[sop["key"]] if sop else [],
+                                          action_proposal=proposal).model_dump_json()))

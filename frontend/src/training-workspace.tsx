@@ -133,7 +133,7 @@ function Overview({ base, run, session }: { base: string; run: Run; session: Ses
     <section id="tickets" className="surface" tabIndex={-1}>
       <div className="training-heading"><h2>실습 티켓</h2></div>
       <div className="training-filters">
-        <label>티켓 검색<input type="search" value={query} onChange={event => setQuery(event.target.value)} placeholder="티켓 번호, 제목, 영향 서비스" /></label>
+        <label>티켓 검색<input type="search" data-companion-anchor="ticket-search" value={query} onChange={event => setQuery(event.target.value)} placeholder="티켓 번호, 제목, 영향 서비스" /></label>
         <label>티켓 상태 필터<select value={status} onChange={event => setStatus(event.target.value)}>
           <option value="">전체</option>{Object.entries(statuses).map(([value, label]) => <option key={value} value={value}>{label}</option>)}
         </select></label>
@@ -398,7 +398,7 @@ function Knowledge({ base, ticketId, session, readOnly = false, initialQuery = '
     <form onSubmit={search} className="training-search">
       <div><label htmlFor="training-source-kind">자료 유형</label>
         <select id="training-source-kind" name="kind"><option value="SOP">승인 SOP</option><option value="CASE">유사 장애</option></select></div>
-      <label>검색어<input name="query" maxLength={300} required defaultValue={initialQuery.replace(/\s+/g, ' ').trim().slice(0, 300)}
+      <label>검색어<input name="query" data-companion-anchor="sop-query" maxLength={300} required defaultValue={initialQuery.replace(/\s+/g, ' ').trim().slice(0, 300)}
         placeholder="예: 메모리 ECC 오류 재진단" /></label>
       <button disabled={pending} data-companion-anchor="search-sop">{pending ? '검색 중…' : '검색'}</button>
     </form>

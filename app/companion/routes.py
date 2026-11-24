@@ -1,15 +1,16 @@
 from datetime import timedelta
 from uuid import UUID
 
-from fastapi import APIRouter, Response
+from fastapi import APIRouter, Request, Response
 from sqlalchemy import func, select
 from sqlalchemy.exc import IntegrityError
 
 from app.agent.models import AgentRun
 from app.agent.queue import ACTIVE_RUNS, utcnow
 from app.agent.schemas import MAX_MESSAGE, RunStatus, clean_text
-from app.auth import CurrentUser, WriteUser
-from app.companion.schemas import ChatInput, Hint, PageContext
+from app.auth import SESSION_COOKIE, CurrentUser, WriteUser, csrf_value
+from app.companion.actions import action_scope, execution_command, log_action, proposal_view
+from app.companion.schemas import ActionDecision, ActionFeedback, ActionView, ChatInput, Hint, PageContext
 from app.companion.service import CHAT_TTL, PAGE_LABELS, clear_transcript, require_trainee, scoped_context, scoped_result
 from app.db import Database
 from app.http import ApiError
@@ -26,6 +27,10 @@ def conversation_rows(user_id, conversation_id):
         AgentRun.requested_by == user_id, AgentRun.created_at >= utcnow() - CHAT_TTL,
         AgentRun.companion["conversation_id"].astext == str(conversation_id),
     )
+
+
+def session_binding(request: Request) -> str:
+    return csrf_value("companion-action:" + request.cookies[SESSION_COOKIE])
 
 
 def valid_hint(body: ChatInput, facts: list[dict]) -> Hint | None:
@@ -72,11 +77,12 @@ def turn_view(db, run: AgentRun):
             "context_info": info, "timestamp": run.created_at,
             "answer": result.get("answer"), "sources": result.get("sources", []),
             "retrieval": result.get("retrieval"), "intent": result.get("intent"), "error": error,
-            "provider": run.provider, "model": run.model, "execution_mode": mode}
+            "provider": run.provider, "model": run.model, "execution_mode": mode,
+            "action_proposal": proposal_view(run, result, utcnow())}
 
 
 @router.post("", status_code=202)
-def chat(body: ChatInput, db: Database, user: WriteUser, response: Response) -> dict:
+def chat(body: ChatInput, db: Database, user: WriteUser, request: Request, response: Response) -> dict:
     require_trainee(user)
     response.headers["Cache-Control"] = "no-store"
     context = body.page_context
@@ -85,10 +91,13 @@ def chat(body: ChatInput, db: Database, user: WriteUser, response: Response) -> 
     message = clean_text(body.message, MAX_MESSAGE)
     metadata = {"conversation_id": str(body.conversation_id), "request_id": str(body.request_id),
                 "page_context": context.model_dump(mode="json"), "active_hint_id": valid_hint(body, facts)}
+    if body.action_view_id:
+        metadata.update(action_view_id=str(body.action_view_id), action_session=session_binding(request))
     previous = db.scalar(conversation_rows(user.id, body.conversation_id).where(
         AgentRun.companion["request_id"].astext == str(body.request_id)))
     if previous:
-        if previous.message != message or previous.companion != metadata:
+        prior = {key: value for key, value in previous.companion.items() if key != "action_view_closed"}
+        if previous.message != message or prior != metadata:
             raise ApiError(409, "CHAT_REQUEST_CONFLICT", "같은 요청 ID에 다른 질문을 보낼 수 없습니다.")
         return turn_view(db, previous)
     now = utcnow()
@@ -116,6 +125,69 @@ def chat_history(conversation_id: UUID, db: Database, user: CurrentUser, respons
     turns = db.scalars(conversation_rows(user.id, conversation_id).order_by(
         AgentRun.created_at.desc(), AgentRun.id.desc()).limit(40)).all()
     return {"conversation_id": conversation_id, "turns": [turn_view(db, turn) for turn in reversed(turns)]}
+
+
+def locked_proposal(db, user, request, conversation_id, message_id, body):
+    require_trainee(user)
+    run = db.scalar(conversation_rows(user.id, conversation_id).where(AgentRun.id == message_id).with_for_update())
+    proposal = (run.result or {}).get("action_proposal") if run else None
+    if (not proposal or proposal["id"] != str(body.proposal_id) or proposal["view_id"] != str(body.view_id)
+            or run.companion.get("action_session") != session_binding(request)):
+        raise ApiError(404, "ACTION_NOT_FOUND", "실행 제안을 찾을 수 없습니다.")
+    return run, proposal
+
+
+@router.post("/{conversation_id}/actions/invalidate", status_code=204)
+def invalidate_view(conversation_id: UUID, body: ActionView, db: Database, user: WriteUser, request: Request) -> None:
+    require_trainee(user)
+    lock_chat(db, user.id)
+    rows = db.scalars(conversation_rows(user.id, conversation_id).where(
+        AgentRun.companion["action_view_id"].astext == str(body.view_id),
+        AgentRun.companion["action_session"].astext == session_binding(request),
+    ).with_for_update())
+    for run in rows:
+        if run.companion.get("action_view_closed"):
+            continue
+        run.companion = {**run.companion, "action_view_closed": True}
+        if proposal := (run.result or {}).get("action_proposal"):
+            if proposal["status"] == "pending":
+                log_action(run, proposal, "stale")
+    db.commit()
+
+
+@router.post("/{conversation_id}/actions/{message_id}")
+def decide_action(conversation_id: UUID, message_id: UUID, body: ActionDecision,
+                  db: Database, user: WriteUser, request: Request, response: Response) -> dict:
+    response.headers["Cache-Control"] = "no-store"
+    run, proposal = locked_proposal(db, user, request, conversation_id, message_id, body)
+    now = utcnow()
+    current = proposal_view(run, run.result, now)
+    if current["status"] != "pending" or proposal["context"] != action_scope(body.page_context):
+        raise ApiError(409, "ACTION_STALE", "이 화면에서 실행할 수 없는 제안입니다. 현재 화면에서 다시 요청해 주세요.")
+    command = None
+    if body.decision == "approve":
+        scoped_context(db, user.id, body.page_context)
+        command = execution_command(db, proposal, body.page_context, body.sop_id)
+    status = "approved" if command else "cancelled"
+    run.result = {**run.result, "action_proposal": {**proposal, "status": status, "decided_at": now.isoformat(),
+                                                   "selected_sop_id": str(body.sop_id) if command and body.sop_id else None}}
+    db.commit()
+    log_action(run, proposal, status, target=body.sop_id if command else None)
+    return {"status": status, "command": command}
+
+
+@router.post("/{conversation_id}/actions/{message_id}/feedback", status_code=204)
+def action_feedback(conversation_id: UUID, message_id: UUID, body: ActionFeedback,
+                    db: Database, user: WriteUser, request: Request) -> None:
+    run, proposal = locked_proposal(db, user, request, conversation_id, message_id, body)
+    if proposal["status"] == body.outcome and proposal.get("error_code") == body.error_code:
+        return
+    if proposal["status"] != "approved":
+        raise ApiError(409, "ACTION_NOT_APPROVED", "승인된 실행의 결과만 기록할 수 있습니다.")
+    run.result = {**run.result, "action_proposal": {**proposal, "status": body.outcome, "error_code": body.error_code,
+                                                   "completed_at": utcnow().isoformat()}}
+    db.commit()
+    log_action(run, proposal, body.outcome, target=proposal.get("selected_sop_id"), error=body.error_code)
 
 
 @router.delete("/{conversation_id}", status_code=204)

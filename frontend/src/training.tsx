@@ -83,7 +83,7 @@ function TrainingHome({ session }: { session: Session }) {
   }
 
   return (
-    <section aria-labelledby="training-home">
+    <section aria-labelledby="training-home" data-companion-destination={summary ? 'practice-home' : undefined}>
       <div className="training-hero">
         <div><p className="training-context">데이터센터 · 교대 근무</p><h1 id="training-home">내 실습</h1>
           <p>장애를 조사하고 가상 조치를 기록한 뒤 다음 근무조에 인계하세요.</p></div>

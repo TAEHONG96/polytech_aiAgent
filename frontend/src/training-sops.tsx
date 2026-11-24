@@ -30,7 +30,7 @@ export function TrainingSopList({ path }: { path: string }) {
       <a href={base}>근무·티켓 목록</a>
       <a href={base + '#knowledge'}>SOP·유사 장애 검색</a>
     </nav>
-    <section className="surface">
+    <section className="surface" data-companion-destination={page ? 'sop-library' : undefined}>
       <h1>승인 SOP 목록</h1>
       {error && <div className="notice" role="alert">{error}
         <button type="button" className="secondary" onClick={() => {
