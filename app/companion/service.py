@@ -14,6 +14,7 @@ from app.agent.provider import AnalysisFailure, reply
 from app.agent.schemas import Evidence, RunStatus, clean_text
 from app.agent.tools import Toolbox
 from app.companion.schemas import ChatDraft, PageContext
+from app.companion.ticket_status import explain_current_status, explain_status, status_question
 from app.db import engine
 from app.http import ApiError
 from app.knowledge.routes import sop_detail
@@ -44,6 +45,13 @@ POLICY = """당신은 데이터센터 실습 교육생을 돕는 키로입니다
 def require_trainee(user: User) -> None:
     if not settings().corpus_training or user.role != "trainee":
         raise ApiError(403, "COMPANION_NOT_AVAILABLE", "코퍼스 교육생 계정에서 키로 채팅을 사용할 수 있습니다.")
+
+
+def check_chat_requester(db: Session, user_id: UUID) -> None:
+    user = db.get(User, user_id)
+    if user is None or not user.is_active:
+        raise PermissionError("Inactive chat requester")
+    require_trainee(user)
 
 
 def scoped_context(db: Session, user_id: UUID, context: PageContext, *, details: bool = False):
@@ -140,15 +148,31 @@ def verified_history(db: Session, work, now) -> list[dict]:
     return history
 
 
+def answer_ticket_status(work) -> dict | None:
+    context = PageContext.model_validate(work.companion["page_context"])
+    question = status_question(work.message, context)
+    if question is None:
+        return None
+
+    kind, statuses = question
+    with Session(engine()) as db:
+        check_chat_requester(db, work.requested_by)
+        info, _, _ = scoped_context(db, work.requested_by, context)
+        if kind == "history":
+            answer, source = explain_current_status(db, context, work.message)
+        else:
+            answer, source = explain_status(kind, statuses), None
+    return {"answer": answer, "context_info": info, "retrieval": "not_required",
+            "sources": [source.model_dump(mode="json", exclude={"content"})] if source else [],
+            "validation_sources": [source.model_dump(mode="json", include={"kind", "source_id", "source_url"})] if source else []}
+
+
 async def answer_chat(work, model, usage, *, seconds, now) -> dict:
     context = PageContext.model_validate(work.companion["page_context"])
     budget = Budget(time.monotonic() + seconds, usage)
     with Session(engine()) as db:
-        user = db.get(User, work.requested_by)
-        if user is None or not user.is_active:
-            raise PermissionError("Inactive chat requester")
-        require_trainee(user)
-        info, facts, page_sop = scoped_context(db, user.id, context, details=True)
+        check_chat_requester(db, work.requested_by)
+        info, facts, page_sop = scoped_context(db, work.requested_by, context, details=True)
         history = verified_history(db, work, now)
 
     search_state = "not_scoped"

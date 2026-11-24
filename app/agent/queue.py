@@ -162,7 +162,7 @@ def process_agent_run(model_factory=generator) -> bool:
     usage = Usage()
     result = None
     failure = None
-    model = None
+    answered_from_records = False
     try:
         with Session(engine()) as db:
             if work.companion is None or work.simulation_run_id is not None:
@@ -178,12 +178,17 @@ def process_agent_run(model_factory=generator) -> bool:
                 authorized_handover(db, work)
             elif work.companion is None and work.simulation_run_id is not None and work.ticket_id is None:
                 raise PermissionError("Invalid training analysis scope")
-        model = model_factory()
-        with Session(engine()) as db, db.begin():
-            run = owned_run(db, work)
-            run.provider = model.provider
-            run.model = model.model
-        result = asyncio.run(execute(work, model, usage))
+        if work.companion is not None:
+            from app.companion.service import answer_ticket_status
+            result = answer_ticket_status(work)
+            answered_from_records = result is not None
+        if not answered_from_records:
+            model = model_factory()
+            with Session(engine()) as db, db.begin():
+                run = owned_run(db, work)
+                run.provider = model.provider
+                run.model = model.model
+            result = asyncio.run(execute(work, model, usage))
     except RunLost:
         return True
     except PermissionError:
@@ -204,6 +209,8 @@ def process_agent_run(model_factory=generator) -> bool:
                 fail_run(run, failure)
             else:
                 run.status = RunStatus.SUCCEEDED
+                if answered_from_records:
+                    run.provider = "workflow"
                 run.result = result
                 run.finished_at = utcnow()
                 run.lease_token = None
