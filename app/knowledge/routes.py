@@ -14,7 +14,7 @@ from starlette.datastructures import UploadFile
 from app.auth import CurrentUser, WriteUser
 from app.db import Database
 from app.http import ApiError
-from app.knowledge.documents import MAX_UPLOAD_BYTES, original_path, register_sop, remove_original
+from app.knowledge.documents import MAX_UPLOAD_BYTES, original_path, register_sop, remove_original, training_sop_text, training_sop_title
 from app.knowledge.embedding import MAX_QUERY_LENGTH, EmbeddingFailure, embedding_profile
 from app.knowledge.indexing import enqueue_sop, sync_ticket_index, ticket_is_indexable
 from app.knowledge.models import IndexJob, IndexStatus, SopDocument, SourceType
@@ -72,7 +72,7 @@ class SearchResponse(BaseModel):
 def _summary(document: SopDocument, job: IndexJob, run_id: UUID | None = None) -> SopSummary:
     prefix = f"/api/v1/simulation-runs/{run_id}" if run_id else "/api/v1"
     return SopSummary(
-        id=document.id, title=document.title, filename=document.filename,
+        id=document.id, title=training_sop_title(document.title) if run_id else document.title, filename=document.filename,
         content_type=document.content_type, size_bytes=document.size_bytes, status=job.status,
         error_code=job.error_code, error_message=job.error_message, attempts=job.attempts,
         indexed_profile=job.indexed_profile, created_at=document.created_at, updated_at=job.updated_at,
@@ -160,7 +160,10 @@ def read_sop(sop_id: UUID, db: Database, user: CurrentUser) -> SopDetail:
 
 def sop_detail(db: Session, sop_id: UUID, run_id: UUID | None = None) -> SopDetail:
     document, job = _document(db, sop_id, approved=run_id is not None)
-    return SopDetail(**_summary(document, job, run_id).model_dump(), extracted_text=document.extracted_text)
+    extracted = document.extracted_text
+    if run_id and extracted:
+        extracted = training_sop_text(extracted)
+    return SopDetail(**_summary(document, job, run_id).model_dump(), extracted_text=extracted)
 
 
 @router.get("/sops/{sop_id}/original")

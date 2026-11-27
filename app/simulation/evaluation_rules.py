@@ -14,7 +14,28 @@ RULES = {
 }
 
 
-def grade(ticket: dict, report_id: str, *, flexible: bool = False, network_pilot: bool = False) -> dict:
+def bmc_decision_evidence(ticket_key: str, performed: list[dict]) -> list[dict]:
+    if ticket_key == "ticket-01":
+        decision = ("RECORD_REMAINING_RISK", "FOLLOWUP_RECORDED")
+        prerequisites = (
+            ("CHECK_HOST_SERVICE", "SERVICE_RESPONDING"), ("RUN_BMC_DIAGNOSTICS", "BMC_TIMEOUT_OBSERVED"),
+            ("CHECK_MANAGEMENT_NETWORK", "MANAGEMENT_MEASURED"), ("OPEN_ALTERNATE_CONSOLE", "CONSOLE_REACHABLE"),
+        )
+    else:
+        decision = ("REQUEST_ADDITIONAL_METRICS", "REQUEST_RECORDED")
+        prerequisites = (("CHECK_MANAGEMENT_NETWORK", "MISSING_DATA"), ("OPEN_ALTERNATE_CONSOLE", "MISSING_DATA"))
+    seen = {}
+    for event in performed:
+        details = event["details"]
+        observed = (details.get("action_code"), (details.get("result") or {}).get("outcome"))
+        if observed == decision and all(check in seen for check in prerequisites):
+            return [seen[check] for check in prerequisites] + [event]
+        seen[observed] = event
+    return []
+
+
+def grade(ticket: dict, report_id: str, *, flexible: bool = False, network_pilot: bool = False,
+          bmc_pilot: bool = False) -> dict:
     timeline = ticket["events"]
     performed = [event for event in timeline if event["type"] == "virtual_action_performed"]
     by_id = {event["id"]: event for event in performed}
@@ -69,7 +90,10 @@ def grade(ticket: dict, report_id: str, *, flexible: bool = False, network_pilot
     supported_decisions = [event for event in performed if code(event) in DECISIONS
                            and any(check["sequence"] < event["sequence"] for check in diagnosed)] if flexible else []
     pilot_ticket = ticket["key"] if network_pilot else None
-    if pilot_ticket == "ticket-02":
+    bmc_ticket = bmc_pilot and ticket["key"] in {"ticket-01", "ticket-02"}
+    if bmc_ticket:
+        supported_decisions = bmc_decision_evidence(ticket["key"], performed) if ticket["status"] not in RESOLVED else []
+    elif pilot_ticket == "ticket-02":
         missing = [event for event in diagnosed if code(event) == "COMPARE_PORT_COUNTERS" and outcome(event) == "MISSING_DATA"]
         requests = [event for event in performed if code(event) == "REQUEST_PEER_MEASUREMENT"
                     and outcome(event) == "REQUEST_RECORDED" and any(check["sequence"] < event["sequence"] for check in missing)]
@@ -99,13 +123,14 @@ def grade(ticket: dict, report_id: str, *, flexible: bool = False, network_pilot
     if ticket["handover_next_action"]:
         proof.append(ref("handover", report_id))
     documented = (after or supported_decisions) and recorded
-    if pilot_ticket in {"ticket-01", "ticket-02"}:
+    explicit_handover = bmc_ticket or pilot_ticket in {"ticket-01", "ticket-02"}
+    if explicit_handover:
         documented = (after or supported_decisions) and ticket["included"] and bool(ticket.get("handover_note"))
     emit("DOCUMENT_ACCURACY", "PASS" if documented else "NOT_MET" if proof else "NOT_OBSERVED", proof)
     pending = [task for task in ticket["work"] if task["status"] != "done"]
     handoff_required = ticket["status"] not in RESOLVED or bool(pending)
     handoff_passed = ticket["included"] and bool(ticket["handover_next_action"])
-    if pilot_ticket in {"ticket-01", "ticket-02"}:
+    if explicit_handover:
         handoff_required = True
         handoff_passed = ticket["status"] not in RESOLVED and ticket["included"] and bool(ticket.get("handover_note"))
     handoff_refs = [ref("handover", report_id)] + [ref("work", task["id"]) for task in pending] if handoff_required else []

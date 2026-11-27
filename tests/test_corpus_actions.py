@@ -9,9 +9,11 @@ from fastapi.testclient import TestClient
 from app.agent.tools import Toolbox
 from app.db import engine
 from app.settings import settings
+from app.simulation.bmc_actions import BMC_SCENARIO, BMC_VERSION
 from app.simulation.evaluation_rules import grade
 from app.simulation.network_actions import NETWORK_SCENARIO, NETWORK_VERSION
 from main import app
+from tests import corpus_bmc
 from tests.corpus_network import SOP_QUERY, SOP_SECTION
 
 
@@ -50,6 +52,11 @@ def test_existing_corpus_options_repeatability_and_guarded_switch():
         def write(path, body):
             return client.post(path, headers={**auth, "Idempotency-Key": uuid4().hex}, json=body)
 
+        def perform(path, code, status=201):
+            response = write(path + "/actions", {"action_code": code})
+            assert response.status_code == status, response.text
+            return response.json()
+
         def catalog(path):
             response = client.get(path + "/actions")
             assert response.status_code == 200
@@ -74,6 +81,31 @@ def test_existing_corpus_options_repeatability_and_guarded_switch():
             assert set(codes) <= catalog(target).keys()
             assert catalog(target)[codes[0]]["repeatable"]
 
+            if scenario == "bmc":
+                expected_results = [
+                    ("CHECK_HOST_SERVICE", "NO_ISSUE", None, "응답 정상"),
+                    ("OPEN_ALTERNATE_CONSOLE", "NO_ISSUE", None, "접속 성공"),
+                    ("CHECK_MANAGEMENT_NETWORK", "INCONCLUSIVE", None, None),
+                    ("RUN_BMC_DIAGNOSTICS", "ISSUE_FOUND", "BMC_TIMEOUT", "응답 시간 초과"),
+                ]
+                saved = []
+                for action_code, status, error_code, observation in expected_results:
+                    event = perform(target, action_code)
+                    saved.append(event)
+                    result = event["result"]
+                    assert (result["diagnostic_status"], result["error_code"]) == (status, error_code)
+                    if observation:
+                        assert result["observations"][0]["value"] == observation
+                    else:
+                        assert result["unconfirmed"]
+                assert client.get(target + "/actions").json()["activity"] == saved
+                unconfirmed = perform(slots["tickets"][1]["ticket_url"], "RUN_BMC_DIAGNOSTICS")["result"]
+                assert (unconfirmed["diagnostic_status"], unconfirmed["error_code"]) == ("INCONCLUSIVE", None)
+                assert unconfirmed["observations"][0]["value"] is None
+                host_id = client.get(target).json()["scenario_host_id"]
+                hosts = client.get(base + "/hosts").json()["items"]
+                assert next(host["state"]["error_code"] for host in hosts if host["id"] == host_id) == "BMC_TIMEOUT"
+
             if scenario == "major":
                 action = target + "/actions"
                 assert catalog(target)["RECORD_SHARED_TIMELINE"]["requires_note"]
@@ -82,11 +114,6 @@ def test_existing_corpus_options_repeatability_and_guarded_switch():
                 assert recorded.status_code == 201 and recorded.json()["note"] == "08:00 세 서비스 오류율 증가"
 
             if scenario == "network":
-                def perform(path, code, status=201):
-                    response = write(path + "/actions", {"action_code": code})
-                    assert response.status_code == status, response.text
-                    return response.json()
-
                 perform(target, "SWITCH_REDUNDANT_PATH", 409)
                 before = perform(target, "MEASURE_PACKET_LOSS")
                 perform(target, "CHECK_REDUNDANT_PATH")
@@ -190,7 +217,9 @@ def test_network_pilot_evidence_from_search_to_evaluation():
         action(recovery, "SWITCH_REDUNDANT_PATH", 409)
         compared = action(recovery, "COMPARE_PORT_COUNTERS")["result"]
         assert [entry["value"] for entry in compared["observations"]] == [7, 130, 0]
-        action(recovery, "MEASURE_PACKET_LOSS")
+        assert (compared["diagnostic_status"], compared["error_code"]) == ("ISSUE_FOUND", "LINK_FLAP")
+        measured = action(recovery, "MEASURE_PACKET_LOSS")["result"]
+        assert (measured["diagnostic_status"], measured["error_code"]) == ("ISSUE_FOUND", "PACKET_LOSS")
         switched = action(recovery, "SWITCH_REDUNDANT_PATH")
         assert switched["result"]["health"] == "verification_pending"
         assert action(recovery, "RERUN_DIAGNOSTICS")["result"]["health"] == "verification_pending"
@@ -199,7 +228,8 @@ def test_network_pilot_evidence_from_search_to_evaluation():
         assert after["result"]["outcome"] == "SERVICE_RECOVERED"
         loss = after["result"]["observations"][0]
         assert (loss["before"], loss["value"], loss["unit"], loss["window"]) == (4.0, 0.2, "%", "10분")
-        assert after["result"]["error_code"] == "LINK_FLAP" and after["result"]["unconfirmed"]
+        assert (after["result"]["diagnostic_status"], after["result"]["error_code"]) == ("NO_ISSUE", None)
+        assert after["result"]["unconfirmed"]
         toolbox = Toolbox(UUID(login.json()["user"]["id"]), UUID(first["ticket_id"]), run_id=UUID(run["id"]))
         history = asyncio.run(toolbox.execute("get_ticket_history", {"ticket_id": first["ticket_id"]}))
         assert history.status == "ok" and any("4.0% → 0.2%" in entry["content"] for entry in history.payload["untrusted_data"])
@@ -207,6 +237,7 @@ def test_network_pilot_evidence_from_search_to_evaluation():
         action(hold, "REQUEST_PEER_MEASUREMENT", 409)
         missing = action(hold, "COMPARE_PORT_COUNTERS")
         assert missing["result"]["observations"][-1]["value"] is None
+        assert (missing["result"]["diagnostic_status"], missing["result"]["error_code"]) == ("INCONCLUSIVE", None)
         assert action(hold, "CHECK_REDUNDANT_PATH")["result"]["outcome"] == "MISSING_DATA"
         assert action(hold, "SWITCH_REDUNDANT_PATH", 409)["error"]["code"] == "ACTION_PRECONDITION_FAILED"
         request = action(hold, "REQUEST_PEER_MEASUREMENT")
@@ -232,3 +263,88 @@ def test_network_pilot_evidence_from_search_to_evaluation():
             for code in ("APPROPRIATE_VIRTUAL_ACTION", "DOCUMENT_ACCURACY", "HANDOVER_UNRESOLVED"):
                 assert rules[code]["result"] == "PASS"
             assert evidence["action_id"] in rules["DOCUMENT_ACCURACY"]["evidence_refs"]
+
+
+@pytest.mark.skipif(engine().url.database != "polytech_training_corpus" or os.getenv("APP_ENV") != "simulation",
+                    reason="Requires the isolated seeded corpus and evaluation worker")
+def test_bmc_v11_distinguishes_management_fault_from_missing_evidence():
+    origin = {"Origin": settings().origin}
+    account = {"username": f"bmc-qa-{uuid4().hex}", "password": uuid4().hex}
+    with TestClient(app, base_url=settings().origin) as client:
+        assert client.post("/api/v1/auth/register", json=account, headers=origin).status_code == 201
+        login = client.post("/api/v1/auth/login", json=account, headers=origin)
+        assert login.status_code == 200
+        auth = {**origin, "X-CSRF-Token": login.json()["csrf_token"]}
+
+        def post(path, body, status=201, key=None):
+            response = client.post(path, headers={**auth, "Idempotency-Key": key or uuid4().hex}, json=body)
+            assert response.status_code == status, response.text
+            return response.json()
+
+        def action(path, code, status=201, *, note=None, key=None):
+            return post(path + "/actions", {"action_code": code, "note": note}, status=status, key=key)
+
+        run = post("/api/v1/simulation-runs", {"scenario_key": BMC_SCENARIO, "scenario_version": BMC_VERSION})
+        base = f'/api/v1/simulation-runs/{run["id"]}'
+        first, second = client.get(base + "/incoming-handover").json()["tickets"]
+        investigation, hold = first["ticket_url"], second["ticket_url"]
+        details = [client.get(path).json() for path in (investigation, hold)]
+        assert [detail["title"] for detail in details] == [case[3] for case in corpus_bmc.BMC_ROW[-1][:2]]
+        first_sop, = details[0]["related_sops"]
+        assert details[1]["related_sops"] == [first_sop]
+        document = client.get(first_sop["source_url"]).json()
+        assert document["title"] == f"교육용 SOP · {corpus_bmc.SOP_TITLE}"
+        assert f"## {corpus_bmc.SOP_SECTION}" in document["extracted_text"]
+        assert "합성" not in document["extracted_text"]
+        assert all("bmc_readings" not in host["state"] for host in client.get(base + "/hosts").json()["items"])
+        hits = post(base + "/knowledge/search", {"ticket_id": second["ticket_id"], "source_types": ["SOP"],
+                                                  "query": corpus_bmc.SOP_QUERY}, status=200)["results"]
+        assert any(hit["source_id"] == first_sop["id"] and hit["section"] == corpus_bmc.SOP_SECTION for hit in hits)
+
+        note = "업무 응답 30/30. 관리 접속 3회 실패. 서버 관리 담당이 20:30 KST에 재확인."
+        action(investigation, "RECORD_REMAINING_RISK", 409, note=note)
+        service = action(investigation, "CHECK_HOST_SERVICE")["result"]
+        assert (service["diagnostic_status"], service["error_code"]) == ("NO_ISSUE", None)
+        assert [row["value"] for row in service["observations"]] == [30, 30]
+        diag = action(investigation, "RUN_BMC_DIAGNOSTICS")["result"]
+        assert (diag["diagnostic_status"], diag["error_code"]) == ("ISSUE_FOUND", "BMC_TIMEOUT")
+        assert [row["value"] for row in diag["observations"]] == [3, 3]
+        management = action(investigation, "CHECK_MANAGEMENT_NETWORK")["result"]
+        assert (management["diagnostic_status"], management["error_code"]) == ("NO_ISSUE", None)
+        assert [row["value"] for row in management["observations"]] == [14, 12, 50]
+        assert action(investigation, "OPEN_ALTERNATE_CONSOLE")["result"]["outcome"] == "CONSOLE_REACHABLE"
+        followup = action(investigation, "RECORD_REMAINING_RISK", note=note)
+        assert followup["result"]["outcome"] == "FOLLOWUP_RECORDED"
+
+        action(hold, "REQUEST_ADDITIONAL_METRICS", 409)
+        management = action(hold, "CHECK_MANAGEMENT_NETWORK")["result"]
+        assert (management["diagnostic_status"], management["error_code"]) == ("INCONCLUSIVE", None)
+        assert management["observations"][1]["value"] is None
+        action(hold, "REQUEST_ADDITIONAL_METRICS", 409)
+        assert action(hold, "OPEN_ALTERNATE_CONSOLE")["result"]["outcome"] == "MISSING_DATA"
+        assert action(hold, "RUN_BMC_DIAGNOSTICS")["result"]["error_code"] is None
+        requested = action(hold, "REQUEST_ADDITIONAL_METRICS", key="bmc-request")
+        assert action(hold, "REQUEST_ADDITIONAL_METRICS", 200, key="bmc-request") == requested
+        assert requested["result"]["outcome"] == "REQUEST_RECORDED"
+        assert requested["result"]["observations"][-1]["value"] == "21:00 KST"
+        assert client.get(hold + "/actions").json()["activity"][-1] == requested
+
+        content = {"summary": "관리 접속 실패와 조사 보류 두 건을 인계합니다.", "open_items": [
+            {"ticket_id": first["ticket_id"], "next_action": note},
+            {"ticket_id": second["ticket_id"], "next_action": "관리망 담당이 비교 장비 표본과 콘솔 기록을 21:00 KST에 확인."},
+        ]}
+        draft = client.put(base + "/outgoing-handover", headers=auth, json={"expected_revision": 0, "content": content})
+        assert draft.status_code == 200, draft.text
+        post(base + "/outgoing-handover/finalize", {"confirm": True, "expected_revision": draft.json()["revision"]}, 200)
+        deadline = time.monotonic() + 20
+        while (summary := client.get(base + "/evaluation").json())["rules_status"] in {"PENDING", "PROCESSING"}:
+            assert time.monotonic() < deadline, summary
+            time.sleep(0.25)
+        assert summary["rules_status"] == "READY", summary
+        for ticket, evidence in ((first, followup), (second, requested)):
+            result = client.get(f'{base}/evaluation/tickets/{ticket["ticket_id"]}').json()
+            rules = {rule["rule_code"]: rule for rule in result["rule_results"]}
+            for code in ("APPROPRIATE_VIRTUAL_ACTION", "DOCUMENT_ACCURACY", "HANDOVER_UNRESOLVED"):
+                assert rules[code]["result"] == "PASS"
+            assert evidence["action_id"] in rules["DOCUMENT_ACCURACY"]["evidence_refs"]
+            assert rules["POST_REPAIR_VALIDATION"]["result"] == "NOT_APPLICABLE"

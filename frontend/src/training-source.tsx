@@ -47,7 +47,7 @@ function SopMarkdown({ text, title }: { text: string; title?: string }) {
   return <div className="training-sop">{blocks.map((block, index) => {
     const heading = /^(#{1,6}) (.+)$/.exec(block)
     if (heading) {
-      if (index === 0 && heading[1] === '#' && title?.replace(/^합성 SOP · /, '') === heading[2]) return null
+      if (index === 0 && heading[1] === '#' && title?.replace(/^(?:교육용|합성) SOP · /, '') === heading[2]) return null
       const level = Math.max(2, heading[1].length)
       const Heading = `h${level}` as 'h2' | 'h3' | 'h4' | 'h5' | 'h6'
       return <Heading key={index}>{sopInline(heading[2])}</Heading>

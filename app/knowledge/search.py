@@ -11,6 +11,7 @@ from sqlalchemy import case, func, literal, or_, select, union_all
 from sqlalchemy.orm import Session
 
 from app.http import ApiError
+from app.knowledge.documents import training_sop_text, training_sop_title
 from app.knowledge.embedding import GEMINI_SEARCH_PROFILE, EmbeddingFailure, checked_vector
 from app.knowledge.indexing import RESOLVED_STATUSES
 from app.knowledge.models import IndexJob, IndexStatus, KnowledgeChunk, SopDocument, SourceType
@@ -175,9 +176,12 @@ def search_index(
     for row in db.execute(ranked_sources):
         kind = SourceType(row.source_type)
         title = row.ticket_title if kind == SourceType.TICKET else row.sop_title
+        content = row.content
         if run_id is None:
             source_url = f"/{'knowledge' if kind == SourceType.SOP else 'tickets'}/{row.source_id}"
         else:
+            if kind == SourceType.SOP:
+                title, content = training_sop_title(title), training_sop_text(content)
             prefix = f"/api/v1/simulation-runs/{run_id}"
             if kind == SourceType.INCIDENT:
                 source_url = f"{prefix}/tickets/{target.id}/incident-sources/{row.source_id}"
@@ -185,7 +189,7 @@ def search_index(
                 source_url = f"{prefix}/{'sops' if kind == SourceType.SOP else 'tickets'}/{row.source_id}"
         results.append(SearchResult(
             source_type=kind, source_id=row.source_id,
-            title=title, content=row.content,
+            title=title, content=content,
             score=round(1 - float(row.distance), 6), chunk_index=row.chunk_index,
             page_number=row.page_number, section=row.section, ticket_version=row.ticket_version,
             source_url=source_url,

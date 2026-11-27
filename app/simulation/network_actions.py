@@ -1,6 +1,6 @@
 """Versioned virtual measurements for the network training pilot."""
 
-from app.simulation.corpus_actions import change, inspect
+from app.simulation.corpus_actions import change, diagnosis, inspect
 
 NETWORK_SCENARIO = "synthetic-ops-network"
 NETWORK_VERSION = "1.1"
@@ -14,12 +14,14 @@ def network_options(state):
     switched = state.get("path_switched") is True
     missing = ["반대편 포트 CRC와 동일 구간 손실률"] if not peer_available else []
     residual = "기존 업링크의 CRC 증가 원인과 이중화 복구 여부"
+    loss_limit = baseline.get("loss_limit_pct", 0.5)
     loss = {"label": "패킷 손실률", "target": baseline["probe_target"], "window": "10분",
             "value": baseline["loss_pct"], "unit": "%"}
+    early_loss_code = "PACKET_LOSS" if loss["value"] > loss_limit else None
     measure = inspect("패킷 손실률 재측정", "현재 경로의 10분 가상 측정값입니다.", outcome="MEASURED",
-                      observations=[loss], unconfirmed=missing)
+                      observations=[loss], unconfirmed=missing, **diagnosis(early_loss_code, "PACKET_LOSS", normal=True))
     if switched:
-        recovered = baseline["switched_loss_pct"] <= baseline["loss_limit_pct"]
+        recovered = baseline["switched_loss_pct"] <= loss_limit
         measure = inspect(
             "패킷 손실률 재측정",
             "우회 경로의 손실률이 실습 복구 기준을 충족했습니다. 기존 경로 위험을 인계하세요."
@@ -27,9 +29,14 @@ def network_options(state):
             outcome="SERVICE_RECOVERED" if recovered else "SERVICE_IMPAIRED",
             set={"health": "degraded"},
             observations=[{**loss, "before": loss["value"], "value": baseline["switched_loss_pct"]},
-                          {"label": "실습 복구 기준 (이하)", "value": baseline["loss_limit_pct"], "unit": "%"}],
+                          {"label": "실습 복구 기준 (이하)", "value": loss_limit, "unit": "%"}],
             unconfirmed=[residual],
+            **diagnosis(None if recovered else "PACKET_LOSS", "PACKET_LOSS", normal=recovered),
         )
+
+    port_diagnosis = diagnosis("LINK_FLAP" if baseline["flaps"] else None, "LINK_FLAP", normal=peer_available)
+    if baseline["local_crc_delta"] or baseline["peer_crc_delta"]:
+        port_diagnosis["diagnostic_status"] = "ISSUE_FOUND"
 
     return {
         "COMPARE_PORT_COUNTERS": inspect(
@@ -43,7 +50,7 @@ def network_options(state):
                  "value": baseline["local_crc_delta"], "unit": "건"},
                 {"label": "CRC 증가", "target": baseline["peer_port"], "window": baseline["window"],
                  "value": baseline["peer_crc_delta"], "unit": "건"},
-            ], unconfirmed=missing,
+            ], unconfirmed=missing, **port_diagnosis,
         ),
         "CHECK_REDUNDANT_PATH": inspect(
             "우회 경로 상태 확인", "우회 링크가 살아 있고 시험 요청이 성공했습니다." if ready
@@ -54,6 +61,7 @@ def network_options(state):
                           {"label": "우회 시험 요청", "target": baseline["probe_target"],
                            "value": "성공" if ready else None}],
             unconfirmed=[] if ready else [*missing, "우회 서비스 시험"],
+            **diagnosis(None, normal=ready),
         ),
         "SWITCH_REDUNDANT_PATH": change(
             "가상 경로 전환", "가상 우회 경로로 전환했습니다. 같은 구간과 시간창으로 손실률을 다시 측정하세요.",

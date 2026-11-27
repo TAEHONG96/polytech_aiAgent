@@ -106,16 +106,20 @@ def test_action_rules_order_memos_and_fixed_time(students):
     work = request(alice, "POST", path + "/work", 201, headers=headers, json={
         "expected_version": memo["ticket_version"], "title": "검증 결과를 인계", "status": "todo",
     }).json()
+    status_check = submit(alice, headers, path, "CHECK_SERVER_STATUS", 201, version=work["version"])
+    assert (status_check["result"]["diagnostic_status"], status_check["result"]["error_code"]) == ("INCONCLUSIVE", None)
     diagnosed = submit(alice, headers, path, "RUN_BMC_DIAGNOSTICS", 201,
-                       key="diagnostic", params={"target": "memory"}, version=work["version"])
-    assert diagnosed["result"]["error_code"] == "MEM_ECC_ERROR"
+                       key="diagnostic", params={"target": "memory"}, version=status_check["ticket_version"])
+    assert (diagnosed["result"]["diagnostic_status"], diagnosed["result"]["error_code"]) == ("ISSUE_FOUND", "MEM_ECC_ERROR")
     submit(alice, headers, path, "CHECK_MEMORY", 201)
     replaced = submit(alice, headers, path, "REPLACE_MEMORY", 201)
     assert replaced["result"]["health"] == "verification_pending"
+    assert (replaced["result"]["diagnostic_status"], replaced["result"]["error_code"]) == ("NOT_APPLICABLE", None)
     verified = submit(alice, headers, path, "RERUN_DIAGNOSTICS", 201)
     assert verified["result"]["health"] == "healthy" and verified["result"]["error_code"] is None
+    assert verified["result"]["diagnostic_status"] == "NO_ISSUE"
     assert submit(alice, headers, path, "RUN_BMC_DIAGNOSTICS", 200,
-                  key="diagnostic", params={"target": "memory"}, version=work["version"]) == diagnosed
+                  key="diagnostic", params={"target": "memory"}, version=status_check["ticket_version"]) == diagnosed
     assert submit(alice, headers, path, "CHECK_SERVER_STATUS", 409,
                   key="diagnostic")["error"]["code"] == "IDEMPOTENCY_KEY_REUSED"
     notes_and_actions = request(alice, "GET", path + "/actions", 200).json()["activity"]
@@ -126,7 +130,7 @@ def test_action_rules_order_memos_and_fixed_time(students):
     page = request(alice, "GET", run + f"/events?after_sequence={events['next_after_sequence']}", 200).json()
     rows = events["items"] + page["items"]
     assert [row["event_sequence"] for row in rows] == list(range(1, len(rows) + 1))
-    assert [row["event_type"] for row in rows].count("virtual_action_performed") == 4
+    assert [row["event_type"] for row in rows].count("virtual_action_performed") == 5
     assert "work_created" in [row["event_type"] for row in rows]
     assert request(alice, "GET", run, 200).json() == view
     assert request(alice, "GET", path, 200).json()["status"] == item["status"]

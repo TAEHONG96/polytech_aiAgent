@@ -23,9 +23,11 @@ from app.knowledge.embedding import FakeEmbedder, embedding_profile
 from app.knowledge.models import IndexJob, IndexStatus, KnowledgeChunk, SopDocument
 from app.models import User
 from app.settings import settings
+from app.simulation.bmc_actions import BMC_RULE_VERSION, BMC_SCENARIO, BMC_VERSION
 from app.simulation.models import Scenario, ScenarioHost, ScenarioIncident, ScenarioShiftSlot, ScenarioTicketTemplate
 from app.simulation.network_actions import NETWORK_RULE_VERSION, NETWORK_SCENARIO, NETWORK_VERSION
 from app.tickets import Severity, TicketStatus
+from tests import corpus_bmc
 from tests.corpus_data import HOST_HISTORY, SCENARIOS, SOPS
 from tests.corpus_expectations import EXPECTATIONS
 from tests.corpus_network import NETWORK_IMPACT, NETWORK_OBSERVATIONS, NETWORK_ROW, SOP, SOP_KEY, SOP_QUERY, SOP_SECTION, SOP_TITLE
@@ -66,15 +68,21 @@ def corpus_scenarios():
         yield position, key, VERSION, row
         if PREFIX + key == NETWORK_SCENARIO:
             yield position, key, NETWORK_VERSION, NETWORK_ROW
+        if PREFIX + key == BMC_SCENARIO:
+            yield position, key, BMC_VERSION, corpus_bmc.BMC_ROW
 
 
-def linked_sop(version, ticket_key, sop):
-    return SOP_KEY if version == NETWORK_VERSION and ticket_key in NETWORK_OBSERVATIONS else sop
+def linked_sop(key, version, ticket_key, sop):
+    if (PREFIX + key, version) == (NETWORK_SCENARIO, NETWORK_VERSION) and ticket_key in NETWORK_OBSERVATIONS:
+        return SOP_KEY
+    if (PREFIX + key, version) == (BMC_SCENARIO, BMC_VERSION) and ticket_key in corpus_bmc.BMC_READINGS:
+        return corpus_bmc.SOP_KEY
+    return sop
 
 
 def corpus_counts():
     scenarios = list(corpus_scenarios())
-    return {"sops": len(SOPS) + 1, "ticket_templates": sum(len(row[-1]) for _, _, _, row in scenarios),
+    return {"sops": len(SOPS) + 2, "ticket_templates": sum(len(row[-1]) for _, _, _, row in scenarios),
             "scenarios": len(scenarios), "host_incidents": len(scenarios)}
 
 
@@ -100,6 +108,8 @@ def guarded_engine():
 def sop_payload(key):
     if key == SOP_KEY:
         return SOP.encode()
+    if key == corpus_bmc.SOP_KEY:
+        return corpus_bmc.SOP.encode()
     title, scope, observe, act, verify = SOPS[key]
     return (
         f"# {title}\n\n가상 데이터센터 교육용 SOP. 모든 식별자와 수치는 합성입니다.\n"
@@ -132,15 +142,18 @@ def validate_data():
             "Missing SOP relationship or scenario outcome.")
     require(len(NETWORK_ROW[-1]) == 5 and NETWORK_OBSERVATIONS.keys() == NETWORK_IMPACT.keys()
             and set(NETWORK_OBSERVATIONS) == {"ticket-01", "ticket-02"}, "Invalid network pilot fixtures.")
+    require(len(corpus_bmc.BMC_ROW[-1]) == 5 and corpus_bmc.BMC_READINGS.keys() == corpus_bmc.BMC_IMPACT.keys()
+            and set(corpus_bmc.BMC_READINGS) == {"ticket-01", "ticket-02"}, "Invalid BMC v1.1 fixtures.")
 
 
 def ensure_sops(db, actor_id):
     documents = {}
-    for key, sop_title in {**{key: sop[0] for key, sop in SOPS.items()}, SOP_KEY: SOP_TITLE}.items():
+    titles = {**{key: sop[0] for key, sop in SOPS.items()}, SOP_KEY: SOP_TITLE, corpus_bmc.SOP_KEY: corpus_bmc.SOP_TITLE}
+    for key, sop_title in titles.items():
         payload = sop_payload(key)
         digest = hashlib.sha256(payload).hexdigest()
         filename = f"{PREFIX}{key}.md"
-        title = "합성 SOP · " + sop_title
+        title = ("교육용 SOP · " if key == corpus_bmc.SOP_KEY else "합성 SOP · ") + sop_title
         matches = db.scalars(select(SopDocument).where(SopDocument.filename == filename)).all()
         if matches:
             require(len(matches) == 1, f"Duplicate fixture filename: {filename}")
@@ -181,6 +194,8 @@ def build_scenarios(db, documents):
         title, family, default_service, default_code, cases = row
         scenario_key = PREFIX + key
         scenario_id = identifier(scenario_key, version)
+        network_pilot = (scenario_key, version) == (NETWORK_SCENARIO, NETWORK_VERSION)
+        bmc_pilot = (scenario_key, version) == (BMC_SCENARIO, BMC_VERSION)
         start = datetime(2026, 11, 10 + position, 8 if position % 2 == 0 else 20, tzinfo=KST)
         crews = ["ABCD"[(position + slot) % 4] for slot in range(3)]
         config = {
@@ -189,24 +204,32 @@ def build_scenarios(db, documents):
                            f"완료된 {cases[2][3]}은 참고 기록입니다. 현재 근무에서 남은 위험을 확인해 {crews[2]}조 Bot으로 넘기세요.",
                 "ticket_templates": ["ticket-01", "ticket-02"],
             },
-            "evaluation_rule_version": NETWORK_RULE_VERSION if version == NETWORK_VERSION else "synthetic-corpus-1",
+            "evaluation_rule_version": NETWORK_RULE_VERSION if network_pilot else
+            BMC_RULE_VERSION if bmc_pilot else "synthetic-corpus-1",
             "action_catalog": catalog,
         }
         hosts = []
         templates = []
+        if bmc_pilot:
+            config["bmc_readings"] = {}
         for index, (status, severity, sop, subject, symptom, diagnostic, performed, next_action) in enumerate(cases):
             ticket_key = f"ticket-{index + 1:02}"
             host_id = identifier(f"{key}/{ticket_key}/host", version)
             asset, service, code = ASSET.get(sop, (family, default_service, default_code))
             resolved = status in RESOLVED
-            code_missing = index == 4 or asset == "memory-pressure"
+            bmc_readings = corpus_bmc.BMC_READINGS.get(ticket_key) if bmc_pilot else None
+            code_missing = index == 4 or asset == "memory-pressure" or (
+                bmc_readings is not None and bmc_readings["bmc_timeouts"] is None
+            )
             host_state = {"asset_kind": asset, "health": "healthy" if resolved else "degraded",
                           "error_code": None if resolved or code_missing else code}
             if asset == "memory" and not resolved:
                 host_state["replacement_done"] = False
-            pilot = version == NETWORK_VERSION and ticket_key in NETWORK_OBSERVATIONS
-            if pilot:
+            network_readings = network_pilot and ticket_key in NETWORK_OBSERVATIONS
+            if network_readings:
                 host_state["network_observations"] = NETWORK_OBSERVATIONS[ticket_key]
+            if bmc_readings:
+                config["bmc_readings"][str(host_id)] = bmc_readings
             hosts.append({"id": host_id, "scenario_id": scenario_id,
                           "host_key": f"SIM-{key.upper()}-{index + 1:02}",
                           "hostname": f"synthetic-{key}-{index + 1:02}.example.invalid",
@@ -214,7 +237,7 @@ def build_scenarios(db, documents):
             previous = index < 3
             detected = start - timedelta(minutes=180 - index * 30) if previous else start
             observed = detected + timedelta(minutes=4 if previous else 0)
-            if pilot:
+            if network_readings or bmc_readings:
                 observed = start - timedelta(minutes=4)
             finished = detected + timedelta(minutes=8) if resolved else None
             crew = crews[0] + "조 Bot" if previous else "교대 시작 관측"
@@ -223,12 +246,13 @@ def build_scenarios(db, documents):
             fields = {
                 "title": subject, "description": f"[교육용] {symptom}\n관측 로그: {diagnostic}",
                 "service": service, "severity": severity, "status": status,
-                "impact": NETWORK_IMPACT[ticket_key] if pilot else "서비스 기준선 복귀를 확인함" if resolved else
+                "impact": NETWORK_IMPACT[ticket_key] if network_readings else
+                          corpus_bmc.BMC_IMPACT[ticket_key] if bmc_readings else "서비스 기준선 복귀를 확인함" if resolved else
                           ("영향 범위 확인 중" if severity == "P4" else f"합성 {service} 서비스 관측 범위에서 영향 확인"),
                 "resolution": performed if resolved else None, "resolved_at": finished.isoformat() if finished else None,
                 "next_action": next_action,
                 "recheck_at": (start + timedelta(hours=1)).isoformat() if status == "waiting" else None,
-                "sop_refs": [str(documents[linked_sop(version, ticket_key, sop)])], "observed_history": history,
+                "sop_refs": [str(documents[linked_sop(key, version, ticket_key, sop)])], "observed_history": history,
             }
             require(all(detected <= datetime.fromisoformat(entry["at"]) <= start for entry in history),
                     f"{key}/{ticket_key}: observation outside initial shift boundary.")
@@ -360,6 +384,8 @@ def verify(owner, documents):
                 "Incorrect education title prefix.")
         require({item["version"] for item in catalog if item["scenario_key"] == NETWORK_SCENARIO} == {VERSION, NETWORK_VERSION},
                 "Network pilot or earlier scenario version is missing.")
+        require({item["version"] for item in catalog if item["scenario_key"] == BMC_SCENARIO} == {VERSION, BMC_VERSION},
+                "BMC v1.1 or earlier scenario version is missing.")
         searched = set()
         observed = 0
         host_incidents = 0
@@ -400,7 +426,7 @@ def verify(owner, documents):
             host_incidents += 1
             for index, case in enumerate(row[-1], 1):
                 status, severity, sop, title, _, diagnostic, performed, next_action = case
-                sop_key = linked_sop(version, f"ticket-{index:02}", sop)
+                sop_key = linked_sop(key, version, f"ticket-{index:02}", sop)
                 ticket = by_title[title]
                 path = base + "/tickets/" + ticket["id"]
                 detail = client.get(path).json()
@@ -423,12 +449,17 @@ def verify(owner, documents):
                         f"{key}: missing or out-of-order seed history.")
                 observed += len(seed_history)
                 if sop_key not in searched:
-                    query = SOP_QUERY if sop_key == SOP_KEY else SOPS[sop_key][0]
+                    if sop_key == SOP_KEY:
+                        query, section = SOP_QUERY, SOP_SECTION
+                    elif sop_key == corpus_bmc.SOP_KEY:
+                        query, section = corpus_bmc.SOP_QUERY, corpus_bmc.SOP_SECTION
+                    else:
+                        query, section = SOPS[sop_key][0], None
                     search = client.post(base + "/knowledge/search", headers=auth, json={
                         "query": query, "source_types": ["SOP"], "ticket_id": ticket["id"], "limit": 5,
                     })
                     require(search.status_code == 200 and any(
-                        hit["source_id"] == str(documents[sop_key]) and (sop_key != SOP_KEY or hit["section"] == SOP_SECTION)
+                        hit["source_id"] == str(documents[sop_key]) and (section is None or hit["section"] == section)
                         for hit in search.json()["results"]
                     ), f"SOP recall@5 failed: {sop_key}")
                     toolbox = Toolbox(UUID(login.json()["user"]["id"]), UUID(ticket["id"]), run_id=UUID(start.json()["id"]))

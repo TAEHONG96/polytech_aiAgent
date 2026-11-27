@@ -42,11 +42,15 @@ type Activity = {
 
 type ActionResult = {
   message: string; health: string; error_code: string | null
+  diagnostic_status?: 'ISSUE_FOUND' | 'NO_ISSUE' | 'INCONCLUSIVE' | 'NOT_APPLICABLE'
   observations?: { label: string; target?: string; window?: string; value: string | number | null; before?: string | number; unit?: string }[]
   unconfirmed?: string[]
 }
 
+const actionDiagnosisLabels = { ISSUE_FOUND: '이상 확인', NO_ISSUE: '점검 범위 이상 없음', INCONCLUSIVE: '확인 불가' }
+
 function ActionResultDetails({ result }: { result: ActionResult }) {
+  const status = result.diagnostic_status
   return <div className="training-action-result">
     <p>{result.message}</p>
     {result.observations?.length ? <dl>{result.observations.map((entry, index) => {
@@ -58,7 +62,8 @@ function ActionResultDetails({ result }: { result: ActionResult }) {
       </div>
     })}</dl> : null}
     {result.unconfirmed?.length ? <p><strong>미확인</strong> · {result.unconfirmed.join(', ')}</p> : null}
-    {(result.error_code || !result.observations) && <small>장애 코드 {result.error_code ?? '오류 없음'}</small>}
+    {result.error_code && <small>{status ? '확인된 오류 코드' : '당시 호스트 장애 코드'} <code>{result.error_code}</code></small>}
+    {!result.error_code && status && status !== 'NOT_APPLICABLE' && <small>{actionDiagnosisLabels[status]}</small>}
   </div>
 }
 

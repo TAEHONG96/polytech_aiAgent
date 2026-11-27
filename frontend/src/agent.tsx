@@ -52,7 +52,7 @@ const statusText: Record<RunState, string> = { queued: '대기 중', running: '�
 const evidenceLabel: Record<string, string> = {
   SOP: 'SOP', SIMILAR_TICKET: '과거 해결 티켓', TICKET_DETAILS: '티켓 상세',
   TICKET_HISTORY: '티켓 이력', OPEN_TICKET: '미해결 티켓',
-  HISTORICAL_INCIDENT: '승인된 합성 과거 사고',
+  HISTORICAL_INCIDENT: '승인된 가상 과거 장애',
 }
 const isActive = (state?: RunState) => state === 'queued' || state === 'running'
 

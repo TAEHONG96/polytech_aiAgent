@@ -171,8 +171,14 @@ class Toolbox:
                                                      observation.get("window"), measure))))
             if unconfirmed := result.get("unconfirmed"):
                 parts.append("미확인 · " + ", ".join(unconfirmed))
+            diagnosis = result.get("diagnostic_status")
+            diagnostic_label = {"ISSUE_FOUND": "이상 확인", "NO_ISSUE": "점검 범위 이상 없음",
+                                "INCONCLUSIVE": "확인 불가"}.get(diagnosis)
+            if diagnostic_label:
+                parts.append(f"가상 조치 판정: {diagnostic_label}")
             if result.get("error_code"):
-                parts.append(f"가상 오류 코드: {result['error_code']}")
+                code_label = "조치에서 확인한 오류 코드" if diagnosis else "당시 호스트 장애 코드"
+                parts.append(f"{code_label}: {result['error_code']}")
         elif event.event_type == "training_note":
             parts.append(f"교육생 자유 메모: {details['note']}")
         return "\n".join(parts)

@@ -243,7 +243,7 @@ Phase 1 시작 요청의 `Idempotency-Key`는 필수이며 공백 없이 1~128�
 {
   "action_id":"93fd54a3-e6aa-4480-81f0-9f8795722c09",
   "status":"COMPLETED",
-  "result":{"error_code":"MEM_ECC_ERROR","message":"가상 진단에서 오류 확인"},
+  "result":{"diagnostic_status":"ISSUE_FOUND","error_code":"MEM_ECC_ERROR","health":"degraded","message":"가상 메모리 진단을 실행했습니다."},
   "ticket_version":4,
   "occurred_at":"2026-11-20T00:15:00Z",
   "event_sequence":12
@@ -256,7 +256,11 @@ Phase 1 시작 요청의 `Idempotency-Key`는 필수이며 공백 없이 1~128�
 
 Phase 3에서는 `Idempotency-Key`가 필수다. 키의 범위는 실행이며 티켓과 본문을 변경해 재사용하면 409다. 같은 요청의 재전송은 최초 저장 응답을 200으로 반환한다. `expected_version`을 제공하면 현재 티켓 버전을 대조한다. 조치의 매개변수는 카탈로그와 일치해야 하며 선행 조건 미충족은 409다. `CUSTOM_NOTE`는 비어 있지 않은 메모만 받아 `kind: NOTE`, `status: RECORDED`, `result: null`로 반환한다. 수행한 가상 조치는 `kind: ACTION`이며 별도 결과를 저장한다. 자동 티켓 상태 전이는 없다.
 
-네트워크 코퍼스 v1.1의 두 인수 티켓은 일부 조치의 `result`에 `outcome`, `observations`, `unconfirmed`를 추가한다. `observations`에는 `label`, `value`가 있고, 해당하는 경우 `target`, `window`, `unit`, `before`를 제공한다. `value: null`은 미확인을 뜻하며 `0`은 관측값이다. `unconfirmed`는 남은 확인 항목이다. 조회와 재전송은 수행 당시 저장한 값을 반환한다. 가상 전환은 양단 비교와 우회 시험을 요구하며, 표본이 누락된 티켓은 비교 후 `REQUEST_PEER_MEASUREMENT`로 요청을 기록할 수 있다.
+새 조치 결과의 `diagnostic_status`는 `ISSUE_FOUND`(이상 확인), `NO_ISSUE`(점검 범위 이상 없음), `INCONCLUSIVE`(자료 부족 등으로 확인 불가), `NOT_APPLICABLE`(진단에 해당하지 않는 조치) 중 하나다. `error_code`는 조치에서 확인한 오류에 부여된 코드이며, 해당 코드가 없으면 `null`이다. `health`는 조치 직후의 호스트 상태다. 조회와 재전송은 수행 당시 저장한 값을 반환한다. `diagnostic_status`가 없는 이전 기록의 `error_code`는 당시 호스트 장애 코드로 표시한다.
+
+일부 조치는 `observations`와 `unconfirmed`를 제공한다. `observations`에는 `label`, `value`가 있고, 해당하는 경우 `target`, `window`, `unit`, `before`를 제공한다. `value: null`은 미확인을 뜻하며 `0`은 관측값이다. `unconfirmed`는 남은 확인 항목이다. 네트워크 코퍼스 v1.1에는 복구 여부나 요청 접수 같은 업무 결과를 나타내는 `outcome`도 있다. 가상 전환은 양단 비교와 우회 시험을 요구하며, 표본이 누락된 티켓은 비교 후 `REQUEST_PEER_MEASUREMENT`로 요청을 기록할 수 있다.
+
+BMC v1.1의 두 인수 티켓은 서비스 응답, BMC 접속, 관리망 비교 및 대체 콘솔의 가상 관측을 각 조치에서 조회한다. 관측 근거가 충분한 티켓의 `RECORD_REMAINING_RISK`는 네 가지 점검과 메모를 요구한다. 자료가 부족한 티켓의 `REQUEST_ADDITIONAL_METRICS`는 관리망·대체 콘솔 확인 후 요청 접수를 기록한다. 발신 인계에는 티켓별 담당자와 다음 확인을 적을 수 있다.
 
 같은 경로의 GET 응답은 기존 작업 목록 `items`와 시나리오 카탈로그 `catalog`, 조치·자유 메모의 저장 영수증 `activity`를 반환한다. `GET /simulation-runs/{run_id}/events?after_sequence=0&limit=50`은 실행 내 티켓 감사 이력을 순번 오름차순으로 반환한다. 현재 단계에서 인계 열람과 검색은 상태를 바꾸지 않는다.
 

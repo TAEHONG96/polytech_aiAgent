@@ -79,7 +79,7 @@ function Login({ onLogin, path }: { onLogin: (session: Session) => void; path: s
           <div><dt>사용자명</dt><dd><code>demo</code></dd></div>
           <div><dt>비밀번호</dt><dd><code>local-demo-password</code></dd></div>
         </dl>
-        <p className="meta">공용 계정입니다. 시연에는 합성 데이터만 사용해 주세요.</p>
+        <p className="meta">공용 계정입니다. 시연에는 가상 데이터만 사용해 주세요.</p>
       </aside>}
       <ErrorNotice message={error} />
       {created && <p role="status">교육 계정이 만들어졌습니다. 새 계정으로 로그인하세요.</p>}

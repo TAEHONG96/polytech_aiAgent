@@ -15,9 +15,10 @@ from app.http import ApiError
 from app.knowledge.indexing import sync_ticket_index
 from app.models import Ticket, TicketEvent
 from app.simulation.access import OwnedRun, WritableRun
-from app.simulation.corpus_actions import SCENARIOS as CORPUS_SCENARIOS, options as corpus_options
+from app.simulation.bmc_actions import BMC_SCENARIO, BMC_VERSION, bmc_options
+from app.simulation.corpus_actions import SCENARIOS as CORPUS_SCENARIOS, diagnosis, options as corpus_options
 from app.simulation.learning import learning_source
-from app.simulation.models import LearningEvent, Scenario, SimulationRunHost
+from app.simulation.models import LearningEvent, Scenario, ScenarioHost, SimulationRunHost
 from app.simulation.network_actions import NETWORK_SCENARIO, NETWORK_VERSION, network_options
 from app.simulation.routes import StartKey
 from app.tickets import Note, Version, ensure_editable, record_event, ticket_by_id
@@ -47,14 +48,35 @@ def rules(db: Database, ticket: Ticket, host: SimulationRunHost) -> dict:
     asset = host.state.get("asset_kind")
     result = {item["code"]: (item["label"], item["variants"][asset]) for item in catalog if asset in item["variants"]}
     network_pilot = (scenario.scenario_key, scenario.version) == (NETWORK_SCENARIO, NETWORK_VERSION)
-    if scenario.scenario_key in CORPUS_SCENARIOS and (scenario.version == "1.0" or network_pilot):
+    bmc_pilot = (scenario.scenario_key, scenario.version) == (BMC_SCENARIO, BMC_VERSION)
+    if scenario.scenario_key in CORPUS_SCENARIOS and (scenario.version == "1.0" or network_pilot or bmc_pilot):
         result = {code: (label, {**rule, "repeatable": code != "REPLACE_MEMORY"}) for code, (label, rule) in result.items()}
         if scenario.scenario_key in {"synthetic-ops-major", "synthetic-ops-recovery"} and asset != "incident":
             result.update(corpus_options({**host.state, "asset_kind": "incident"}))
-        result.update(corpus_options(host.state))
+        readings = scenario.config.get("bmc_readings", {}).get(str(host.scenario_host_id)) if bmc_pilot else None
+        bmc_host = db.get(ScenarioHost, host.scenario_host_id) if asset == "bmc" and not readings else None
+        result.update(corpus_options(host.state, host_key=bmc_host.host_key if bmc_host else None))
         if network_pilot and "network_observations" in host.state:
             result.update(network_options(host.state))
+        if readings:
+            result.update(bmc_options(readings))
     return result
+
+
+def catalog_diagnosis(action_code: str, state: dict) -> dict:
+    # These are the diagnostic targets of the original scenario catalog.
+    asset = state.get("asset_kind")
+    code = state.get("error_code")
+    healthy = state.get("health") == "healthy" and code is None
+    if action_code == "CHECK_SERVER_STATUS":
+        return diagnosis(None)
+    if asset == "memory" and action_code in {"CHECK_MEMORY", "RUN_BMC_DIAGNOSTICS", "RERUN_DIAGNOSTICS"}:
+        return diagnosis(code, "MEM_ECC_ERROR", normal=healthy)
+    if asset == "storage" and action_code in {"CHECK_STORAGE", "RUN_BMC_DIAGNOSTICS", "RERUN_DIAGNOSTICS"}:
+        return diagnosis(code, "STORAGE_LATENCY", normal=healthy)
+    if action_code in {"RUN_BMC_DIAGNOSTICS", "RERUN_DIAGNOSTICS"}:
+        return diagnosis(None)
+    return {"diagnostic_status": "NOT_APPLICABLE"}
 
 
 def blocking_reason(state: dict, rule: dict) -> str | None:
@@ -133,8 +155,11 @@ def perform(ticket_id: UUID, body: ActionInput, key: StartKey, response: Respons
         if changes := rule.get("set"):
             host.state = {**host.state, **changes}
         event_type = ACTION
-        result = {"error_code": host.state.get("error_code"), "health": host.state.get("health"), "message": rule["message"]}
-        result.update({field: rule[field] for field in ("outcome", "observations", "unconfirmed") if field in rule})
+        result = {"error_code": None, "health": host.state.get("health"), "message": rule["message"]}
+        if "diagnostic_status" not in rule:
+            result.update(catalog_diagnosis(body.action_code, host.state))
+        result.update({field: rule[field] for field in ("diagnostic_status", "error_code", "outcome", "observations", "unconfirmed")
+                       if field in rule})
 
     ticket.version += 1
     ticket.updated_at = datetime.now(timezone.utc)

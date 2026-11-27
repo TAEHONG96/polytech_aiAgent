@@ -10,6 +10,7 @@ from sqlalchemy import select, text
 from app.auth import CurrentUser, WriteUser
 from app.db import Database
 from app.http import ApiError
+from app.knowledge.documents import training_sop_title
 from app.knowledge.indexing import sync_ticket_index
 from app.knowledge.models import SopDocument
 from app.models import Ticket
@@ -257,6 +258,8 @@ def training_ticket(ticket: Ticket) -> dict:
     data = view(ticket).model_dump()
     if ticket.scenario_ticket_template_id is not None:
         data["description"] = education_label(ticket.description)
+        if ticket.impact and ticket.impact.startswith("합성 "):
+            data["impact"] = "가상 " + ticket.impact.removeprefix("합성 ")
     return {**data, "scenario_host_id": ticket.scenario_host_id,
             "training_origin": ticket.training_origin}
 
@@ -282,7 +285,7 @@ def ticket_detail(ticket_id: UUID, db: Database, run: OwnedRun) -> dict:
         SopDocument.id.in_(refs), SopDocument.training_approved.is_(True),
     ).order_by(SopDocument.title)).all() if refs else ()
     return {**result, "related_sops": [
-        {"id": doc.id, "title": doc.title, "source_url": f"/api/v1/simulation-runs/{run.id}/sops/{doc.id}"}
+        {"id": doc.id, "title": training_sop_title(doc.title), "source_url": f"/api/v1/simulation-runs/{run.id}/sops/{doc.id}"}
         for doc in docs
     ]}
 

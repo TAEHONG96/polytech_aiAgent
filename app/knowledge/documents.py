@@ -29,6 +29,18 @@ MIME_TYPES = {".pdf": "application/pdf", ".txt": "text/plain", ".md": "text/mark
 logger = logging.getLogger(__name__)
 
 
+def training_sop_title(title: str) -> str:
+    if title.startswith("합성 SOP · "):
+        return "교육용 SOP · " + title.removeprefix("합성 SOP · ")
+    if title.startswith("합성 데이터센터 "):
+        return "가상 데이터센터 " + title.removeprefix("합성 데이터센터 ")
+    return title
+
+
+def training_sop_text(text: str) -> str:
+    return text.replace("가상 데이터센터 교육용 SOP. 모든 식별자와 수치는 합성입니다.", "가상 데이터센터 교육용 SOP입니다.")
+
+
 class DocumentFailure(Exception):
     pass
 

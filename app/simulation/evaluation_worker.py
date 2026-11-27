@@ -14,6 +14,7 @@ from sqlalchemy.orm import Session
 from app.agent.provider import AnalysisFailure, generator
 from app.agent.queue import utcnow
 from app.db import engine
+from app.simulation.bmc_actions import BMC_RULE_VERSION
 from app.simulation.evaluation_feedback import explain
 from app.simulation.evaluation_input import ELIGIBLE
 from app.simulation.evaluation_rules import grade
@@ -26,6 +27,7 @@ MAX_ATTEMPTS = 3
 LEASE = timedelta(seconds=120)
 RULE_VERSIONS = {"dco-basic-1.0": grade, "dco-basic-1.1": grade,
                  "synthetic-corpus-1": partial(grade, flexible=True),
+                 BMC_RULE_VERSION: partial(grade, flexible=True, bmc_pilot=True),
                  NETWORK_RULE_VERSION: partial(grade, flexible=True, network_pilot=True)}
 
 
